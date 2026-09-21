@@ -435,83 +435,106 @@ fn grid_children(app &IdeApp, scale f64) []ui2.Element {
 	return children
 }
 
+// Keep selection targets in screen pixels when possible, but do not let them
+// extend beyond very small controls in a fitted adaptive canvas.
 fn selection_outline(width f64, height f64, id int) []ui2.Element {
-	line := 2.0
+	line_width := minimum(2, width)
+	line_height := minimum(2, height)
+	marker_width := minimum(7, width)
+	marker_height := minimum(7, height)
+	handle_width := minimum(9, width)
+	handle_height := minimum(9, height)
 	mut children := [
-		panel('', ui2.rect(0, 0, width, line), color_primary, []),
-		panel('', ui2.rect(0, height - line, width, line), color_primary, []),
-		panel('', ui2.rect(0, 0, line, height), color_primary, []),
-		panel('', ui2.rect(width - line, 0, line, height), color_primary, []),
-		panel('', ui2.rect(0, 0, 7, 7), color_primary, []),
-		panel('', ui2.rect(width - 7, 0, 7, 7), color_primary, []),
-		panel('', ui2.rect(0, height - 7, 7, 7), color_primary, []),
+		panel('', ui2.rect(0, 0, width, line_height), color_primary, []),
+		panel('', ui2.rect(0, height - line_height, width, line_height), color_primary, []),
+		panel('', ui2.rect(0, 0, line_width, height), color_primary, []),
+		panel('', ui2.rect(width - line_width, 0, line_width, height), color_primary, []),
+		panel('', ui2.rect(0, 0, marker_width, marker_height), color_primary, []),
+		panel('', ui2.rect(width - marker_width, 0, marker_width, marker_height), color_primary, []),
+		panel('', ui2.rect(0, height - marker_height, marker_width, marker_height), color_primary, []),
 	]
-	children << ui2.draggable_view_with_cursor('resize_${id}', ui2.rect(width - 9, height - 9, 9, 9), ui2.BoxStyle{
+	children << ui2.draggable_view_with_cursor('resize_${id}', ui2.rect(width - handle_width, height - handle_height, handle_width, handle_height), ui2.BoxStyle{
 		bg: color_primary
 	}, ui2.cursor_resize_nwse, [])
 	return children
 }
 
+// Adaptive stretching can leave a control smaller than its own content insets.
+// Clip its child frames instead of passing negative sizes to the renderer or
+// replacing the entire control with an empty box.
+fn designer_content_frame(frame ui2.Rect, width f64, height f64) ui2.Rect {
+	left := clamp(frame.x, 0, width)
+	top := clamp(frame.y, 0, height)
+	right := clamp(frame.x + frame.width, left, width)
+	bottom := clamp(frame.y + frame.height, top, height)
+	return ui2.rect(left, top, right - left, bottom - top)
+}
+
 fn designer_component(component DesignerComponent, selected bool, scale f64) ui2.Element {
 	width := component.width * scale
 	height := component.height * scale
-	if width < 32 || height < 20 {
-		return ui2.with_tooltip(ui2.draggable_view_with_cursor('cmp_${component.id}', ui2.rect(component.x * scale, component.y * scale, width, height), ui2.BoxStyle{bg: if selected { color_primary } else { component.background }}, ui2.cursor_pointing_hand, []), component.name)
-	}
 	mut children := []ui2.Element{}
-	font_size := clamp(component.font_size * scale, 8, 32)
+	// Scale the font and all content insets together with the frame. A minimum
+	// screen-space font size would overflow short controls when zoomed out.
+	font_size := clamp(component.font_size, 8, 32) * scale
 	match component.kind {
 		'label' {
-			children << ui2.label('', component.text, ui2.rect(4, 2, width - 8, height - 4), text_style(font_size, component.color, false))
+			children << ui2.label('', component.text, ui2.rect(4 * scale, 2 * scale, width - 8 * scale, height - 4 * scale), text_style(font_size, component.color, false))
 		}
 		'button' {
-			children << ui2.label('', component.text, ui2.rect(5, (height - font_size - 3) / 2, width - 10, font_size + 5), ui2.TextStyle{
+			children << ui2.label('', component.text, ui2.rect(5 * scale, (height - font_size - 3 * scale) / 2, width - 10 * scale, font_size + 5 * scale), ui2.TextStyle{
 				size: font_size
 				color: component.color
 				align: .center
 			})
 		}
 		'text_field' {
-			children << ui2.label('', component.text, ui2.rect(9, (height - font_size - 3) / 2, width - 18, font_size + 5), text_style(font_size, 0x94a3b8, false))
+			children << ui2.label('', component.text, ui2.rect(9 * scale, (height - font_size - 3 * scale) / 2, width - 18 * scale, font_size + 5 * scale), text_style(font_size, 0x94a3b8, false))
 		}
 		'text_area' {
-			children << ui2.label('', component.text, ui2.rect(9, 7, width - 18, height - 14), ui2.TextStyle{
+			children << ui2.label('', component.text, ui2.rect(9 * scale, 7 * scale, width - 18 * scale, height - 14 * scale), ui2.TextStyle{
 				size: font_size
 				color: component.color
 				lines: 4
 			})
 		}
 		'checkbox' {
-			children << panel('', ui2.rect(4, (height - 16 * scale) / 2, 16 * scale, 16 * scale), 0xffffff, [])
+			children << panel('', ui2.rect(4 * scale, (height - 16 * scale) / 2, 16 * scale, 16 * scale), 0xffffff, [])
 			if component.checked {
-				children << ui2.label('', 'x', ui2.rect(5, (height - 17 * scale) / 2, 15 * scale, 17 * scale), text_style(font_size, color_primary, true))
+				children << ui2.label('', 'x', ui2.rect(5 * scale, (height - 17 * scale) / 2, 15 * scale, 17 * scale), text_style(font_size, color_primary, true))
 			}
-			children << ui2.label('', component.text, ui2.rect(26 * scale, (height - font_size - 3) / 2, width - 30 * scale, font_size + 5), text_style(font_size, component.color, false))
+			children << ui2.label('', component.text, ui2.rect(26 * scale, (height - font_size - 3 * scale) / 2, width - 30 * scale, font_size + 5 * scale), text_style(font_size, component.color, false))
 		}
 		'dropdown' {
-			children << ui2.label('', component.text, ui2.rect(9, (height - font_size - 3) / 2, width - 32, font_size + 5), text_style(font_size, component.color, false))
-			children << ui2.label('', 'v', ui2.rect(width - 24, (height - font_size - 3) / 2, 18, font_size + 5), ui2.TextStyle{
+			children << ui2.label('', component.text, ui2.rect(9 * scale, (height - font_size - 3 * scale) / 2, width - 32 * scale, font_size + 5 * scale), text_style(font_size, component.color, false))
+			children << ui2.label('', 'v', ui2.rect(width - 24 * scale, (height - font_size - 3 * scale) / 2, 18 * scale, font_size + 5 * scale), ui2.TextStyle{
 				size: font_size
 				color: color_muted
 				align: .center
 			})
 		}
 		'rectangle' {
-			children << ui2.label('', component.name, ui2.rect(6, 5, width - 12, 18), text_style(9, color_muted, false))
+			children << ui2.label('', component.name, ui2.rect(6 * scale, 5 * scale, width - 12 * scale, 18 * scale), text_style(9 * scale, color_muted, false))
 		}
 		'image' {
 			children << ui2.label('', if component.text.len > 0 {
 				os_name(component.text)
 			} else {
 				'IMAGE'
-			}, ui2.rect(5, (height - 18) / 2, width - 10, 18), ui2.TextStyle{
-				size: 10
+			}, ui2.rect(5 * scale, (height - 18 * scale) / 2, width - 10 * scale, 18 * scale), ui2.TextStyle{
+				size: 10 * scale
 				color: color_muted
 				align: .center
 				bold: true
 			})
 		}
 		else {}
+	}
+	for index, child in children {
+		children[index] = ui2.Element{
+			...child
+			frame: designer_content_frame(child.frame, width, height)
+		}
 	}
 	if selected {
 		children << selection_outline(width, height, component.id)
