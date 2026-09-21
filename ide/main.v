@@ -303,6 +303,7 @@ fn (mut app IdeApp) handle_event(event string) {
 	if app.handle_pointer(event, ui2.bounds()) {
 		return
 	}
+	if app.handle_adaptive_event(event) { return }
 	if app.handle_property_event(event) {
 		return
 	}

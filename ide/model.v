@@ -24,6 +24,8 @@ pub mut:
 	font_size     f64 = 14
 	checked       bool
 	event_handler string
+	layout ui2.AdaptiveLayout
+	variations []ui2.AdaptiveLayoutVariation
 }
 
 struct IdeSnapshot {
@@ -34,11 +36,22 @@ struct IdeSnapshot {
 	form_width      f64
 	form_height     f64
 	form_background u32
+	adaptive bool
+	breakpoint_width f64 = 600
+	breakpoint_height f64 = 600
 }
 
 @[heap]
 pub struct IdeApp {
 pub mut:
+	adaptive bool
+	breakpoint_width f64 = 600
+	breakpoint_height f64 = 600
+	preview_width f64
+	preview_height f64
+	edit_width_class ui2.AdaptiveSizeClass
+	edit_height_class ui2.AdaptiveSizeClass
+	show_layout_guides bool = true
 	components      []DesignerComponent
 	selected_id     int
 	next_id         int = 1
@@ -87,7 +100,10 @@ fn new_ide_app(root string) IdeApp {
 
 fn (app &IdeApp) snapshot() IdeSnapshot {
 	return IdeSnapshot{
-		components: app.components.clone()
+		adaptive: app.adaptive
+		breakpoint_width: app.breakpoint_width
+		breakpoint_height: app.breakpoint_height
+		components: clone_designer_components(app.components)
 		selected_id: app.selected_id
 		next_id: app.next_id
 		form_name: app.form_name
@@ -98,9 +114,13 @@ fn (app &IdeApp) snapshot() IdeSnapshot {
 }
 
 fn (mut app IdeApp) restore(snapshot IdeSnapshot) {
-	app.components = snapshot.components.clone()
+	app.components = clone_designer_components(snapshot.components)
 	app.selected_id = snapshot.selected_id
 	app.next_id = snapshot.next_id
+	app.adaptive = snapshot.adaptive
+	app.breakpoint_width = snapshot.breakpoint_width
+	app.breakpoint_height = snapshot.breakpoint_height
+	if !app.adaptive { app.reset_adaptive_preview() }
 	app.form_name = snapshot.form_name
 	app.form_width = snapshot.form_width
 	app.form_height = snapshot.form_height
@@ -264,10 +284,14 @@ fn (app &IdeApp) selected_component() ?DesignerComponent {
 	if index < 0 {
 		return none
 	}
-	return app.components[index]
+	return app.component_for_canvas(app.components[index])
 }
 
 fn (app &IdeApp) inspector_property_ids() []string {
+	if app.inspector_tab == 'layout' {
+		if !app.adaptive { return []string{} }
+		return if app.selected_id == 0 { ['layout_breakpoint_width', 'layout_breakpoint_height'] } else { ['layout_min_width', 'layout_max_width', 'layout_min_height', 'layout_max_height'] }
+	}
 	if app.inspector_tab == 'events' {
 		return if app.selected_id > 0 { ['property_event'] } else { []string{} }
 	}
@@ -348,6 +372,10 @@ fn snap_clamped(value f64, low f64, high f64, enabled bool) f64 {
 }
 
 fn (mut app IdeApp) add_component(kind string, x f64, y f64) int {
+	if !app.require_geometry_editable() || app.editing_variation() {
+		app.status = 'Add controls in Base, then vary their layout or visibility by size class.'
+		return -1
+	}
 	if component_tag(kind).len == 0 {
 		return -1
 	}
@@ -376,6 +404,10 @@ fn (mut app IdeApp) add_component(kind string, x f64, y f64) int {
 }
 
 fn (mut app IdeApp) duplicate_selected() {
+	if !app.require_geometry_editable() || app.editing_variation() {
+		app.status = 'Duplicate controls in Base; all their size-class variations are copied.'
+		return
+	}
 	index := app.find_component_index(app.selected_id)
 	if index < 0 {
 		app.status = 'Select a component to duplicate.'
@@ -392,6 +424,7 @@ fn (mut app IdeApp) duplicate_selected() {
 		x: snap_clamped(original.x + 16, 0, app.form_width - original.width, app.snap_to_grid)
 		y: snap_clamped(original.y + 16, 0, app.form_height - original.height, app.snap_to_grid)
 	}
+	copy.variations = original.variations.clone()
 	app.components << copy
 	app.selected_id = id
 	app.changed('Duplicated `${original.name}` as `${copy.name}`.')
@@ -438,8 +471,9 @@ fn (mut app IdeApp) begin_drag(id int, mode string, local_x f64, local_y f64) {
 	if index < 0 {
 		return
 	}
-	component := app.components[index]
 	app.selected_id = id
+	if !app.require_geometry_editable() { return }
+	component := app.component_for_canvas(app.components[index])
 	app.drag_component_id = id
 	app.drag_mode = mode
 	app.drag_grab_x = local_x - component.x
@@ -461,15 +495,16 @@ fn (mut app IdeApp) drag_to(local_x f64, local_y f64) {
 		app.checkpoint()
 		app.drag_checkpointed = true
 	}
-	mut component := app.components[index]
+	if !app.require_geometry_editable() { return }
+	mut component := app.component_for_canvas(app.components[index])
 	if app.drag_mode == 'resize' {
-		component.width = snap_clamped(local_x - component.x, 32, app.form_width - component.x, app.snap_to_grid)
-		component.height = snap_clamped(local_y - component.y, 24, app.form_height - component.y, app.snap_to_grid)
+		component.width = snap_clamped(local_x - component.x, 32, app.canvas_width() - component.x, app.snap_to_grid)
+		component.height = snap_clamped(local_y - component.y, 24, app.canvas_height() - component.y, app.snap_to_grid)
 	} else {
-		component.x = snap_clamped(local_x - app.drag_grab_x, 0, app.form_width - component.width, app.snap_to_grid)
-		component.y = snap_clamped(local_y - app.drag_grab_y, 0, app.form_height - component.height, app.snap_to_grid)
+		component.x = snap_clamped(local_x - app.drag_grab_x, 0, app.canvas_width() - component.width, app.snap_to_grid)
+		component.y = snap_clamped(local_y - app.drag_grab_y, 0, app.canvas_height() - component.height, app.snap_to_grid)
 	}
-	app.components[index] = component
+	app.store_geometry(index, component)
 	app.dirty = true
 	app.sync_source()
 }
@@ -490,11 +525,13 @@ fn (mut app IdeApp) nudge_selected(dx f64, dy f64) {
 	if index < 0 {
 		return
 	}
+	if !app.require_geometry_editable() { return }
 	app.checkpoint()
-	mut component := app.components[index]
-	component.x = clamp(component.x + dx, 0, app.form_width - component.width)
-	component.y = clamp(component.y + dy, 0, app.form_height - component.height)
-	app.components[index] = component
+	if !app.require_geometry_editable() { return }
+	mut component := app.component_for_canvas(app.components[index])
+	component.x = clamp(component.x + dx, 0, app.canvas_width() - component.width)
+	component.y = clamp(component.y + dy, 0, app.canvas_height() - component.height)
+	app.store_geometry(index, component)
 	app.changed('${component.name}: ${int(component.x)}, ${int(component.y)}.')
 }
 
@@ -515,7 +552,9 @@ fn parse_f64_property(raw string) ?f64 {
 	if trimmed.len == 0 {
 		return none
 	}
-	return strconv.atof64(trimmed) or { return none }
+	value := strconv.atof64(trimmed) or { return none }
+	if math.is_nan(value) || math.is_inf(value, 0) { return none }
+	return value
 }
 
 fn parse_color_property(raw string) ?u32 {
@@ -545,6 +584,9 @@ fn (app &IdeApp) component_name_available(name string, except_id int) bool {
 }
 
 fn (mut app IdeApp) set_component_text_property(field string, value string) bool {
+	if field in ['property_x', 'property_y', 'property_width', 'property_height'] {
+		return app.set_geometry_property(field, value)
+	}
 	index := app.find_component_index(app.selected_id)
 	if index < 0 {
 		return false
@@ -584,30 +626,13 @@ fn (mut app IdeApp) set_component_text_property(field string, value string) bool
 			app.checkpoint()
 			component.event_handler = value
 		}
-		'property_x', 'property_y', 'property_width', 'property_height', 'property_font_size' {
+		'property_font_size' {
 			number := parse_f64_property(value) or {
-				app.status = 'Enter a numeric value.'
+				app.status = 'Enter a finite numeric value.'
 				return false
 			}
 			app.checkpoint()
-			match field {
-				'property_x' {
-					component.x = clamp(number, 0, app.form_width - component.width)
-				}
-				'property_y' {
-					component.y = clamp(number, 0, app.form_height - component.height)
-				}
-				'property_width' {
-					component.width = clamp(number, 32, app.form_width - component.x)
-				}
-				'property_height' {
-					component.height = clamp(number, 24, app.form_height - component.y)
-				}
-				'property_font_size' {
-					component.font_size = clamp(number, 8, 72)
-				}
-				else {}
-			}
+			component.font_size = clamp(number, 8, 72)
 		}
 		'property_background', 'property_color' {
 			color := parse_color_property(value) or {
@@ -660,11 +685,10 @@ fn (mut app IdeApp) set_form_property(field string, value string) bool {
 			}
 			app.checkpoint()
 			if field == 'form_property_width' {
-				app.form_width = clamp(number, 320, 1920)
+				app.resize_design_canvas(clamp(number, 320, 1920), app.form_height)
 			} else {
-				app.form_height = clamp(number, 240, 1200)
+				app.resize_design_canvas(app.form_width, clamp(number, 240, 1200))
 			}
-			app.keep_components_on_form()
 		}
 		'form_property_background' {
 			color := parse_color_property(value) or {
@@ -711,11 +735,12 @@ fn component_vml(component DesignerComponent) string {
 	tag := component_tag(component.kind)
 	mut properties := [
 		'id: ${component.name}',
-		'x: ${int(component.x)}',
-		'y: ${int(component.y)}',
-		'width: ${int(component.width)}',
-		'height: ${int(component.height)}',
+		'x: ${component.x:g}',
+		'y: ${component.y:g}',
+		'width: ${component.width:g}',
+		'height: ${component.height:g}',
 	]
+	properties << adaptive_rule_properties(component.layout, false)
 	match component.kind {
 		'label' {
 			properties << 'text: "${vml_escape(component.text)}"'
@@ -780,7 +805,8 @@ fn component_vml(component DesignerComponent) string {
 			properties << 'clickable: true'
 		}
 	}
-	if component.kind == 'dropdown' {
+	for variation in component.variations { properties << adaptive_variation_vml(variation) }
+	if component.kind == 'dropdown' || component.variations.len > 0 {
 		mut lines := ['    ${tag} {']
 		for property in properties {
 			lines << '        ${property}'
@@ -796,10 +822,15 @@ fn generate_vml(app &IdeApp) string {
 		'// Generated by the ui2 visual IDE. Designer metadata is kept on Screen.',
 		'Screen {',
 		'    id: ${app.form_name}',
-		'    width: ${int(app.form_width)}',
-		'    height: ${int(app.form_height)}',
+		'    width: ${app.form_width:g}',
+		'    height: ${app.form_height:g}',
 		'    background: ${color_hex(app.form_background)}',
 	]
+	if app.adaptive {
+		lines << '    adaptive: true'
+		lines << '    layout_breakpoint_width: ${app.breakpoint_width:g}'
+		lines << '    layout_breakpoint_height: ${app.breakpoint_height:g}'
+	}
 	for component in app.components {
 		lines << ''
 		lines << component_vml(component)
@@ -818,7 +849,7 @@ fn node_number(node &ui2.VNode, key string, fallback f64) !f64 {
 	if raw.len == 0 {
 		return fallback
 	}
-	return strconv.atof64(raw) or { return error('`${key}` on `${node.id}` must be a plain number') }
+	return parse_f64_property(raw) or { return error('`${key}` on `${node.id}` must be a plain finite number') }
 }
 
 fn node_color(node &ui2.VNode, key string, fallback u32) !u32 {
@@ -840,7 +871,7 @@ fn component_from_node(node &ui2.VNode, id int) !DesignerComponent {
 		return error('`${name}` is not a valid component id')
 	}
 	for child in node.children {
-		if node.tag != 'Dropdown' || child.tag != 'Option' {
+		if child.tag != 'LayoutVariation' && (node.tag != 'Dropdown' || child.tag != 'Option') {
 			return error('nested `${child.tag}` inside `${name}` is not editable by the visual designer')
 		}
 	}
@@ -850,7 +881,12 @@ fn component_from_node(node &ui2.VNode, id int) !DesignerComponent {
 	} else if kind == 'image' {
 		text = node.prop_or('source', node.prop('path'))
 	}
+	if node_number(node, 'width', default_width)! < 0 || node_number(node, 'height', default_height)! < 0 {
+		return error('designer control dimensions must be non-negative')
+	}
 	return DesignerComponent{
+		layout: ui2.adaptive_layout_from_vnode(node)!
+		variations: ui2.adaptive_variations_from_vnode(node)!
 		id: id
 		kind: kind
 		name: name
@@ -901,13 +937,25 @@ fn document_from_vml(source string) !IdeSnapshot {
 	if !valid_identifier(form_name) {
 		return error('`${form_name}` is not a valid form id')
 	}
+	adaptive_raw := root.prop_or('adaptive', 'false')
+	if adaptive_raw !in ['true', 'false'] { return error('adaptive must be true or false') }
+	width := node_number(root, 'width', default_form_width)!
+	height := node_number(root, 'height', default_form_height)!
+	bw := node_number(root, 'layout_breakpoint_width', 600)!
+	bh := node_number(root, 'layout_breakpoint_height', 600)!
+	if width <= 0 || height <= 0 || bw <= 0 || bh <= 0 {
+		return error('form dimensions and size-class breakpoints must be positive')
+	}
 	return IdeSnapshot{
+		adaptive: adaptive_raw == 'true'
+		breakpoint_width: bw
+		breakpoint_height: bh
 		components: components
 		selected_id: 0
 		next_id: components.len + 1
 		form_name: form_name
-		form_width: node_number(root, 'width', default_form_width)!
-		form_height: node_number(root, 'height', default_form_height)!
+		form_width: width
+		form_height: height
 		form_background: node_color(root, 'background', 0xf8fafc)!
 	}
 }
@@ -916,6 +964,7 @@ fn (mut app IdeApp) apply_source(source string) ! {
 	document := document_from_vml(source)!
 	app.checkpoint()
 	app.restore(document)
+	app.reset_adaptive_preview()
 	app.source_text = generate_vml(app)
 	app.source_modified = false
 	app.active_tab = 'designer'
@@ -951,6 +1000,7 @@ fn (mut app IdeApp) open_document(raw_path string) ! {
 	source := os.read_file(path)!
 	document := document_from_vml(source)!
 	app.restore(document)
+	app.reset_adaptive_preview()
 	app.file_path = path
 	app.path_input = path
 	app.project_root = os.dir(path)
@@ -998,6 +1048,10 @@ fn (mut app IdeApp) generate_companion(overwrite bool) !string {
 }
 
 fn (mut app IdeApp) new_document() {
+	app.adaptive = false
+	app.breakpoint_width = 600
+	app.breakpoint_height = 600
+	app.reset_adaptive_preview()
 	app.components = []DesignerComponent{}
 	app.selected_id = 0
 	app.next_id = 1
