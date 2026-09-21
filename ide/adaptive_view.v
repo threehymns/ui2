@@ -85,7 +85,7 @@ fn build_layout_inspector(width f64, app &IdeApp) []ui2.Element {
 		enabled: editable
 	}
 	children << tiny_button('layout_reset_variation', 'Reset this size-class override', ui2.rect(4,
-		308, width - 8, 24), app.editing_variation())
+		308, width - 8, 24), editable && app.editing_variation())
 	children << layout_help('Both pins stretch the control; Center keeps its center offset. A maximum of 0 means unlimited. Text and events are shared across layouts.',
 		344, width, 70)
 	if app.editing_variation() {

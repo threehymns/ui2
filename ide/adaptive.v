@@ -177,7 +177,7 @@ fn (mut app IdeApp) set_layout_axis(horizontal bool, axis ui2.AdaptiveAxis) {
 
 fn (mut app IdeApp) reset_selected_variation() {
 	index := app.find_component_index(app.selected_id)
-	if index < 0 || !app.editing_variation() {
+	if index < 0 || !app.editing_variation() || !app.require_geometry_editable() {
 		return
 	}
 	at := app.exact_variation_index(app.components[index])
@@ -402,6 +402,11 @@ fn (mut app IdeApp) resize_design_canvas(width f64, height f64) {
 }
 
 fn (mut app IdeApp) handle_adaptive_event(event string) bool {
+	// A stale reset event must not apply pending source and lose its edit scope.
+	// Match the inspector's disabled state before the source-application path.
+	if event == 'layout_reset_variation' && !app.geometry_editable() {
+		return true
+	}
 	mutates_document :=
 		event in ['layout_enable', 'layout_reset_variation', 'layout_hidden', 'layout_min_width', 'layout_max_width', 'layout_min_height', 'layout_max_height', 'layout_breakpoint_width', 'layout_breakpoint_height']
 		|| event.starts_with('layout_x_') || event.starts_with('layout_y_')
