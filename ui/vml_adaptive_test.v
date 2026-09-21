@@ -124,3 +124,153 @@ fn test_adaptive_vml_duplicate_class_is_an_error() {
 		assert err.msg().contains('duplicate LayoutVariation')
 	}
 }
+
+fn test_adaptive_vml_omitted_dimensions_use_the_reference_canvas_once() {
+	node := parse_vml('Screen { adaptive: true width: 760 height: 520
+		Rectangle { id: full layout_x: stretch layout_y: stretch }
+		Rectangle { id: wide height: 48 layout_x: stretch }
+		Rectangle { id: tall width: 64 layout_y: stretch }
+	}')!
+	for size in [rect(0, 0, 760, 520), rect(0, 0, 390, 844), rect(0, 0, 320, 240),
+		rect(0, 0, 1280, 900), rect(0, 0, 390, 844)] {
+		root := element_from_vnode(node, size)!
+		assert adaptive_test_element(root, 'full')?.frame == size
+		assert adaptive_test_element(root, 'wide')?.frame == rect(0, 0, size.width, 48)
+		assert adaptive_test_element(root, 'tall')?.frame == rect(0, 0, 64, size.height)
+		// Rendering must not fill defaults into the saved document on resize.
+		assert node.children[0].prop('width') == ''
+		assert node.children[0].prop('height') == ''
+		assert node.children[1].prop('width') == ''
+		assert node.children[2].prop('height') == ''
+		validate_element_tree(root)!
+	}
+}
+
+fn test_adaptive_vml_omitted_dimensions_support_all_parent_pins() {
+	for axis in ['start', 'end', 'center', 'stretch'] {
+		node := parse_vml('Screen { adaptive: true width: 760 height: 520
+			Rectangle { id: fill x: 14 y: 18 layout_x: ${axis} layout_y: ${axis} }
+		}')!
+		for size in [rect(0, 0, 390, 240), rect(0, 0, 1280, 900)] {
+			dx := size.width - 760
+			dy := size.height - 520
+			expected := match axis {
+				'end' { rect(14 + dx, 18 + dy, 760, 520) }
+				'center' { rect(14 + dx / 2, 18 + dy / 2, 760, 520) }
+				'stretch' { rect(14, 18, size.width, size.height) }
+				else { rect(14, 18, 760, 520) }
+			}
+
+			root := element_from_vnode(node, size)!
+			assert adaptive_test_element(root, 'fill')?.frame == expected, axis
+		}
+	}
+}
+
+fn test_adaptive_vml_omitted_base_dimensions_preserve_explicit_variations() {
+	mut node := parse_vml('Screen { adaptive: true width: 760 height: 520
+		Rectangle { id: fill layout_x: stretch layout_y: stretch
+			LayoutVariation { width_class: compact reference_width: 390 reference_height: 844
+				x: 5 y: 6 width: 300 height: 400 }
+		}
+	}')!
+	for size in [rect(0, 0, 390, 844), rect(0, 0, 500, 700), rect(0, 0, 800, 900),
+		rect(0, 0, 390, 844)] {
+		root := element_from_vnode(node, size)!
+		expected := if size.width < 600 {
+			rect(5, 6, size.width - 90, size.height - 444)
+		} else {
+			size
+		}
+		assert adaptive_test_element(root, 'fill')?.frame == expected
+		assert node.children[0].prop('width') == ''
+		assert node.children[0].children.len == 1
+	}
+	// Fixed-coordinate Screens still use their declared size, not runtime bounds.
+	node.props['adaptive'] = 'false'
+	fixed := element_from_vnode(node, rect(0, 0, 390, 844))!
+	assert adaptive_test_element(fixed, 'fill')?.frame == rect(0, 0, 760, 520)
+}
+
+fn assert_adaptive_container_metadata_is_nonvisual(tag string, first string, second string) ! {
+	variations := [
+		'LayoutVariation { width_class: compact reference_width: 390 reference_height: 844 x: 4 y: 8 width: 300 height: 240 }',
+		'LayoutVariation { height_class: compact reference_width: 760 reference_height: 520 x: 4 y: 8 width: 300 height: 240 }',
+		'LayoutVariation { width_class: regular height_class: regular reference_width: 800 reference_height: 800 x: 4 y: 8 width: 300 height: 240 }',
+	]
+	// Nonzero padding/spacing and non-first page/slide indices expose metadata
+	// that is counted for layout even if the resulting blank element is hidden.
+	properties := 'id: container x: 4 y: 8 width: 300 height: 240 padding: 8 spacing: 7 columns: 2 page: 1 index: 1'
+	clean := '${tag} { ${properties} ${first} ${second} }'
+	annotated := '${tag} { ${properties} ${variations[0]} ${first} ${variations[1]} ${second} ${variations[2]} }'
+	mut node := parse_vml('Screen { width: 760 height: 520 ${annotated} }')!
+	mut expected_node := parse_vml('Screen { width: 760 height: 520 ${clean} }')!
+	before := node.children[0].props.clone()
+	child_count := node.children[0].children.len
+	// Exercise retained metadata when adaptive mode is absent, enabled, disabled,
+	// and enabled again, reusing the same parsed document throughout.
+	for mode in ['', 'true', 'false', 'true', 'false'] {
+		if mode.len > 0 {
+			node.props['adaptive'] = mode
+			expected_node.props['adaptive'] = mode
+		}
+		root := element_from_vnode(node, rect(0, 0, 390, 844))!
+		expected := element_from_vnode(expected_node, rect(0, 0, 390, 844))!
+		assert root == expected, '${tag}: adaptive=${mode}'
+		assert node.children[0].props == before
+		assert node.children[0].children.len == child_count
+		validate_element_tree(root)!
+	}
+	// Standalone containers and nested layouts also take specialized traversals.
+	direct := element_from_vml(annotated, rect(0, 0, 390, 844))!
+	assert direct == element_from_vml(clean, rect(0, 0, 390, 844))!, tag
+	for mode in ['true', 'false'] {
+		nested := 'Screen { adaptive: ${mode} width: 760 height: 520
+			View { width: 500 height: 400 ${annotated} } }'
+		expected := 'Screen { adaptive: ${mode} width: 760 height: 520
+			View { width: 500 height: 400 ${clean} } }'
+		assert element_from_vml(nested, rect(0, 0, 390, 844))! == element_from_vml(expected, rect(0,
+			0, 390, 844))!, '${tag}: nested adaptive=${mode}'
+	}
+}
+
+fn test_adaptive_vml_metadata_never_occupies_container_layout_slots() {
+	for tag in ['Column', 'Row', 'BoxLayout', 'FloatLayout', 'RelativeLayout', 'GridLayout',
+		'AnchorLayout', 'StackLayout', 'PageLayout', 'Carousel', 'View', 'Rectangle', 'Scroll'] {
+		assert_adaptive_container_metadata_is_nonvisual(tag,
+			'Label { id: first text: "First" width: 40 height: 24 }',
+			'Label { id: second text: "Second" width: 40 height: 24 }')!
+	}
+}
+
+fn test_adaptive_vml_metadata_is_inert_in_empty_layouts() {
+	for tag in ['Column', 'Row', 'BoxLayout', 'FloatLayout', 'RelativeLayout', 'GridLayout',
+		'AnchorLayout', 'StackLayout', 'PageLayout', 'Carousel', 'View', 'Rectangle', 'Scroll'] {
+		assert_adaptive_container_metadata_is_nonvisual(tag, '', '')!
+	}
+}
+
+fn test_adaptive_vml_metadata_preserves_specialized_content_options_and_menus() {
+	cases := {
+		'TabbedPanel':   [
+			'Tab { id: one text: "One" Label { id: inside text: "Keep me" } }',
+			'Tab { id: two text: "Two" }',
+		]
+		'Accordion':     [
+			'AccordionItem { id: one title: "One" Label { id: inside text: "Keep me" } }',
+			'AccordionItem { id: two title: "Two" }',
+		]
+		'TreeView':      ['TreeNode { id: one text: "One" }', 'TreeNode { id: two text: "Two" }']
+		'ScreenManager': ['Screen { id: one Label { id: inside text: "Keep me" } }',
+			'Screen { id: two }']
+		'ModalView':     ['Label { id: inside text: "Keep me" }', '']
+		'Popup':         ['Label { id: inside text: "Keep me" }', '']
+		'MessageBox':    ['Button { id: ok text: "OK" }', 'Button { id: cancel text: "Cancel" }']
+		'Dropdown':      ['Option { text: "One" }', 'Option { text: "Two" }']
+		'Column':        ['MenuItem { id: inspect text: "Inspect" }',
+			'Label { id: inside text: "Keep me" }']
+	}
+	for tag, content in cases {
+		assert_adaptive_container_metadata_is_nonvisual(tag, content[0], content[1])!
+	}
+}

@@ -115,8 +115,10 @@ pub fn adaptive_variations_from_vnode(node &VNode) ![]AdaptiveLayoutVariation {
 // Return a new node, leaving the parsed document untouched for the next resize.
 fn v_adaptive_child(node &VNode, reference_width f64, reference_height f64, available Rect, width_class AdaptiveSizeClass, height_class AdaptiveSizeClass) !&VNode {
 	mut layout := adaptive_layout_from_vnode(node)!
+	// Missing dimensions describe the saved canvas, not the current viewport.
+	// The resolver applies the viewport delta exactly once.
 	mut design := rect(v_adaptive_number(node, 'x', 0)!, v_adaptive_number(node, 'y', 0)!, v_adaptive_number(node,
-		'width', available.width)!, v_adaptive_number(node, 'height', available.height)!)
+		'width', reference_width)!, v_adaptive_number(node, 'height', reference_height)!)
 	if design.width < 0 || design.height < 0 {
 		return error('adaptive control dimensions must be non-negative')
 	}

@@ -1121,14 +1121,20 @@ fn v_message_box(node &VNode, frame Rect) Element {
 	)
 }
 
+// Layout metadata must be excluded before assigning slots or measuring a
+// container. Dedicated menu/option traversals still consume their own entries.
+fn v_is_layout_metadata(node &VNode) bool {
+	return node.tag in ['MenuItem', 'Option', 'LayoutVariation']
+}
+
 fn v_children(node &VNode, frame Rect) ![]Element {
 	if node.tag == 'Screen' && node.prop_bool('adaptive') {
 		return v_adaptive_children(node, frame)!
 	}
 	mut out := []Element{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option', 'LayoutVariation'] {
-			continue // context menu entries, not child views
+		if v_is_layout_metadata(child) {
+			continue // metadata, not child views
 		}
 		out << node_to_element(child, frame)!
 	}
@@ -1159,7 +1165,7 @@ fn v_column(node &VNode, frame Rect) !Element {
 	mut y := padding
 	mut children := []Element{}
 	for child in node.children {
-		if child.tag == 'MenuItem' || child.tag == 'Option' {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		child_h := v_dimension(child, 'height', 32)
@@ -1178,7 +1184,7 @@ fn v_row(node &VNode, frame Rect) !Element {
 	mut x := padding
 	mut children := []Element{}
 	for child in node.children {
-		if child.tag == 'MenuItem' || child.tag == 'Option' {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		child_w := v_dimension(child, 'width', 80)
@@ -1228,7 +1234,7 @@ fn v_box_layout(node &VNode, frame Rect) !Element {
 	mut visible := []&VNode{}
 	mut items := []BoxLayoutChild{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option'] {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		visible << child
@@ -1299,7 +1305,7 @@ fn v_float_layout(node &VNode, frame Rect) !Element {
 	mut visible := []&VNode{}
 	mut items := []FloatLayoutChild{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option'] {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		visible << child
@@ -1344,7 +1350,7 @@ fn v_grid_config(node &VNode, frame Rect) !GridLayoutConfig {
 fn v_grid(node &VNode, frame Rect) !Element {
 	mut visible := []&VNode{}
 	for child in node.children {
-		if child.tag !in ['MenuItem', 'Option'] {
+		if !v_is_layout_metadata(child) {
 			visible << child
 		}
 	}
@@ -1378,7 +1384,7 @@ fn v_anchor(node &VNode, frame Rect) !Element {
 	config := v_anchor_config(node, rect(0, 0, frame.width, frame.height))!
 	mut children := []Element{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option'] {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		size := rect(0, 0, v_dimension(child, 'width', 80), v_dimension(child, 'height', 32))
@@ -1412,7 +1418,7 @@ fn v_stack(node &VNode, frame Rect) !Element {
 	mut visible := []&VNode{}
 	mut sizes := []Rect{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option'] {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		visible << child
@@ -1442,7 +1448,7 @@ fn v_page_layout_config(node &VNode, frame Rect, child_count int) PageLayoutConf
 fn v_page_layout(node &VNode, frame Rect) !Element {
 	mut visible := []&VNode{}
 	for child in node.children {
-		if child.tag !in ['MenuItem', 'Option'] {
+		if !v_is_layout_metadata(child) {
 			visible << child
 		}
 	}
@@ -1725,7 +1731,7 @@ fn v_carousel(node &VNode, frame Rect) !Element {
 	local := rect(0, 0, frame.width, frame.height)
 	mut slides := []Element{}
 	for child in node.children {
-		if child.tag in ['MenuItem', 'Option'] {
+		if v_is_layout_metadata(child) {
 			continue
 		}
 		if child.tag in ['CarouselSlide', 'Slide'] {
