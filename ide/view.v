@@ -63,16 +63,17 @@ fn ide_layout(frame ui2.Rect, app &IdeApp) IdeLayout {
 	tabs := ui2.rect(center_x, stage.y + stage.height, center_width, ide_tab_height)
 	output := ui2.rect(center_x, tabs.y + tabs.height, center_width, output_height)
 	available_width := stage.width - 54
-	available_height := stage.height - 54
-	mut scale := minimum(available_width / app.form_width, available_height / app.form_height)
+	adaptive_height := adaptive_toolbar_height(app)
+	available_height := stage.height - adaptive_height - 54
+	mut scale := minimum(available_width / app.canvas_width(), available_height / app.canvas_height())
 	if scale > 1 {
 		scale = 1
 	}
-	if scale < 0.2 {
-		scale = 0.2
+	if scale < 0.01 {
+		scale = 0.01
 	}
-	form_width := app.form_width * scale
-	form_height := app.form_height * scale
+	form_width := app.canvas_width() * scale
+	form_height := app.canvas_height() * scale
 	return IdeLayout{
 		frame: frame
 		toolbar: ui2.rect(0, 0, frame.width, ide_toolbar_height)
@@ -85,7 +86,7 @@ fn ide_layout(frame ui2.Rect, app &IdeApp) IdeLayout {
 		stage: stage
 		output: output
 		status: ui2.rect(0, status_y, frame.width, ide_status_height)
-		form: ui2.rect(stage.x + (stage.width - form_width) / 2, stage.y + (stage.height - form_height) / 2, form_width, form_height)
+		form: ui2.rect(stage.x + (stage.width - form_width) / 2, stage.y + adaptive_height + (stage.height - adaptive_height - form_height) / 2, form_width, form_height)
 		scale: scale
 	}
 }
@@ -363,9 +364,13 @@ fn build_object_inspector(layout IdeLayout, app &IdeApp) ui2.Element {
 		'${app.form_name}: Screen'
 	}
 	children << ui2.label('', selection_title, ui2.rect(8, 24, width - 16, 18), text_style(11, color_text, true))
-	children << ide_button('inspector_properties', 'Properties', ui2.rect(6, 46, (width - 17) / 2, 24), app.inspector_tab == 'properties')
-	children << ide_button('inspector_events', 'Events', ui2.rect(11 + (width - 17) / 2, 46, (width - 17) / 2, 24), app.inspector_tab == 'events')
-	property_children := if app.inspector_tab == 'events' {
+	tab_width := (width - 24) / 3
+	children << ide_button('inspector_properties', 'Properties', ui2.rect(6, 46, tab_width, 24), app.inspector_tab == 'properties')
+	children << ide_button('inspector_layout', 'Layout', ui2.rect(12 + tab_width, 46, tab_width, 24), app.inspector_tab == 'layout')
+	children << ide_button('inspector_events', 'Events', ui2.rect(18 + tab_width * 2, 46, tab_width, 24), app.inspector_tab == 'events')
+	property_children := if app.inspector_tab == 'layout' {
+		build_layout_inspector(width - 12, app)
+	} else if app.inspector_tab == 'events' {
 		build_events_inspector(width - 12, app)
 	} else if component := app.selected_component() {
 		build_component_inspector(width - 12, component)
@@ -382,7 +387,7 @@ fn build_tabs(layout IdeLayout, app &IdeApp) ui2.Element {
 	children << ide_button('tab_source', 'Source', ui2.rect(94, 4, 78, 28), app.active_tab == 'source')
 	children << ide_button('tab_preview', 'Preview', ui2.rect(178, 4, 78, 28), app.active_tab == 'preview')
 	info_width := if app.output_open { layout.tabs.width - 282 } else { layout.tabs.width - 366 }
-	children << ui2.label('', '${app.form_name}  ${int(app.form_width)} x ${int(app.form_height)}  ${int(layout.scale * 100)}%', ui2.rect(270, 9, info_width, 18), text_style(10, color_muted, false))
+	children << ui2.label('', '${app.form_name}  ${int(app.canvas_width())} x ${int(app.canvas_height())}  ${int(layout.scale * 100)}%', ui2.rect(270, 9, info_width, 18), text_style(10, color_muted, false))
 	if !app.output_open {
 		children << tiny_button('toggle_output', 'Messages', ui2.rect(layout.tabs.width - 80, 6, 72, 24), true)
 	}
@@ -418,13 +423,13 @@ fn grid_children(app &IdeApp, scale f64) []ui2.Element {
 	}
 	spacing := designer_grid_size * scale
 	mut x := spacing
-	for x < app.form_width * scale {
-		children << panel('', ui2.rect(x, 0, 1, app.form_height * scale), 0xe8edf3, [])
+	for x < app.canvas_width() * scale {
+		children << panel('', ui2.rect(x, 0, 1, app.canvas_height() * scale), 0xe8edf3, [])
 		x += spacing
 	}
 	mut y := spacing
-	for y < app.form_height * scale {
-		children << panel('', ui2.rect(0, y, app.form_width * scale, 1), 0xe8edf3, [])
+	for y < app.canvas_height() * scale {
+		children << panel('', ui2.rect(0, y, app.canvas_width() * scale, 1), 0xe8edf3, [])
 		y += spacing
 	}
 	return children
@@ -450,6 +455,9 @@ fn selection_outline(width f64, height f64, id int) []ui2.Element {
 fn designer_component(component DesignerComponent, selected bool, scale f64) ui2.Element {
 	width := component.width * scale
 	height := component.height * scale
+	if width < 32 || height < 20 {
+		return ui2.with_tooltip(ui2.draggable_view_with_cursor('cmp_${component.id}', ui2.rect(component.x * scale, component.y * scale, width, height), ui2.BoxStyle{bg: if selected { color_primary } else { component.background }}, ui2.cursor_pointing_hand, []), component.name)
+	}
 	mut children := []ui2.Element{}
 	font_size := clamp(component.font_size * scale, 8, 32)
 	match component.kind {
@@ -522,15 +530,21 @@ fn designer_component(component DesignerComponent, selected bool, scale f64) ui2
 
 fn build_designer_form(layout IdeLayout, app &IdeApp) ui2.Element {
 	mut children := grid_children(app, layout.scale)
-	if app.components.len == 0 {
+	if app.components.len == 0 && layout.form.width > 80 {
 		children << ui2.label('', 'Choose a control from the palette, then click here to place it.', ui2.rect(30, 28, layout.form.width - 60, 28), ui2.TextStyle{
 			size: 12
 			color: 0x94a3b8
 			align: .center
 		})
 	}
-	for component in app.components {
+	children << adaptive_guide_children(app, layout.scale)
+	for raw in app.components {
+		component := app.component_for_canvas(raw)
+		if component.width <= 0 || component.height <= 0 { continue }
 		children << designer_component(component, component.id == app.selected_id, layout.scale)
+		if component.layout.hidden {
+			children << ui2.label('', 'Hidden', ui2.rect(component.x * layout.scale, component.y * layout.scale, 54, 16), text_style(9, color_muted, true))
+		}
 	}
 	return ui2.clickable_view('form_surface', layout.form, ui2.BoxStyle{
 		bg: app.form_background
@@ -575,7 +589,9 @@ fn preview_component(component DesignerComponent, scale f64) ui2.Element {
 
 fn build_preview_form(layout IdeLayout, app &IdeApp) ui2.Element {
 	mut children := []ui2.Element{}
-	for component in app.components {
+	for raw in app.components {
+		component := app.component_for_canvas(raw)
+		if component.layout.hidden || component.width <= 0 || component.height <= 0 { continue }
 		children << preview_component(component, layout.scale)
 	}
 	return panel('preview_form', layout.form, app.form_background, children)
@@ -658,6 +674,7 @@ fn build_ide(frame ui2.Rect, app &IdeApp) ui2.Element {
 		'preview' { children << build_preview_form(layout, app) }
 		else { children << build_designer_form(layout, app) }
 	}
+	children << build_adaptive_toolbar(layout, app)
 	children << build_tabs(layout, app)
 	children << build_output(layout, app)
 	children << build_status(layout, app)

@@ -776,7 +776,7 @@ pub fn element_from_vnode(node &VNode, frame Rect) !Element {
 }
 
 fn node_to_element(node &VNode, frame Rect) !Element {
-	resolved := v_frame(node, frame)
+	resolved := if node.tag == 'Screen' && node.prop_bool('adaptive') { frame } else { v_frame(node, frame) }
 	el := node_to_element_base(node, resolved)!
 	key := node.prop('key')
 	menu := v_menu(node)
@@ -1122,9 +1122,12 @@ fn v_message_box(node &VNode, frame Rect) Element {
 }
 
 fn v_children(node &VNode, frame Rect) ![]Element {
+	if node.tag == 'Screen' && node.prop_bool('adaptive') {
+		return v_adaptive_children(node, frame)!
+	}
 	mut out := []Element{}
 	for child in node.children {
-		if child.tag == 'MenuItem' || child.tag == 'Option' {
+		if child.tag in ['MenuItem', 'Option', 'LayoutVariation'] {
 			continue // context menu entries, not child views
 		}
 		out << node_to_element(child, frame)!
