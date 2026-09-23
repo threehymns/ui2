@@ -1071,10 +1071,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	fn immediate_key_event(e &gg.Event) KeyEvent {
 		return KeyEvent{
 			code: unsafe { KeyCode(int(e.key_code)) }
-			shift: e.modifiers & u32(gg.Modifier.shift) != 0
-			ctrl: e.modifiers & u32(gg.Modifier.ctrl) != 0
-			alt: e.modifiers & u32(gg.Modifier.alt) != 0
-			cmd: e.modifiers & u32(gg.Modifier.super) != 0
+			shift: e.modifiers & u32(sapp.Modifier.shift) != 0
+			ctrl: e.modifiers & u32(sapp.Modifier.ctrl) != 0
+			alt: e.modifiers & u32(sapp.Modifier.alt) != 0
+			cmd: e.modifiers & u32(sapp.Modifier.super) != 0
 		}
 	}
 
@@ -1108,16 +1108,16 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return ''
 		}
 		mut modifiers := []string{}
-		if e.modifiers & u32(gg.Modifier.super) != 0 {
+		if e.modifiers & u32(sapp.Modifier.super) != 0 {
 			modifiers << 'cmd'
 		}
-		if e.modifiers & u32(gg.Modifier.ctrl) != 0 {
+		if e.modifiers & u32(sapp.Modifier.ctrl) != 0 {
 			modifiers << 'ctrl'
 		}
-		if e.modifiers & u32(gg.Modifier.alt) != 0 {
+		if e.modifiers & u32(sapp.Modifier.alt) != 0 {
 			modifiers << 'alt'
 		}
-		if e.modifiers & u32(gg.Modifier.shift) != 0 {
+		if e.modifiers & u32(sapp.Modifier.shift) != 0 {
 			modifiers << 'shift'
 		}
 		if modifiers.len > 0 {
@@ -1187,20 +1187,20 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return
 		}
 		primary_modifier := text_navigation_primary_modifier(
-			modifiers & u32(gg.Modifier.ctrl) != 0,
-			modifiers & u32(gg.Modifier.alt) != 0,
-			modifiers & u32(gg.Modifier.super) != 0,
+			modifiers & u32(sapp.Modifier.ctrl) != 0,
+			modifiers & u32(sapp.Modifier.alt) != 0,
+			modifiers & u32(sapp.Modifier.super) != 0,
 		)
 		word_modifier := text_navigation_word_modifier(
-			modifiers & u32(gg.Modifier.ctrl) != 0,
-			modifiers & u32(gg.Modifier.alt) != 0,
+			modifiers & u32(sapp.Modifier.ctrl) != 0,
+			modifiers & u32(sapp.Modifier.alt) != 0,
 		)
 		boundary_modifier := text_navigation_boundary_modifier(
-			modifiers & u32(gg.Modifier.super) != 0,
+			modifiers & u32(sapp.Modifier.super) != 0,
 		)
 		if focused_text_area && (navigation_key == 'up' || navigation_key == 'down') {
 			if move_focused_text_area_caret(mut editor, if navigation_key == 'up' { -1 } else { 1 },
-				modifiers & u32(gg.Modifier.shift) != 0) {
+				modifiers & u32(sapp.Modifier.shift) != 0) {
 				g_text_editors[g_focused_field] = editor
 			}
 			return
@@ -1208,7 +1208,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		if focused_text_area && (navigation_key == 'home' || navigation_key == 'end')
 			&& !primary_modifier {
 			if move_focused_text_area_line_boundary(mut editor, navigation_key == 'end',
-				modifiers & u32(gg.Modifier.shift) != 0) {
+				modifiers & u32(sapp.Modifier.shift) != 0) {
 				g_text_editors[g_focused_field] = editor
 			}
 			return
@@ -1220,7 +1220,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		navigation_modifier := if navigation_key == 'a' { primary_modifier } else { word_modifier }
 		if navigation_key.len > 0 && apply_text_editor_navigation(mut editor, navigation_key,
-			modifiers & u32(gg.Modifier.shift) != 0, navigation_modifier) {
+			modifiers & u32(sapp.Modifier.shift) != 0, navigation_modifier) {
 			g_text_editors[g_focused_field] = editor
 		}
 		if key == .enter || key == .kp_enter {
