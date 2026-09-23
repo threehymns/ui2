@@ -796,6 +796,11 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		id := scroll_hit_test(x, y)
 		if id.len == 0 {
+			// No scrollable view under the cursor. Forward the gesture to the
+			// app instead of dropping it so non-scrolling canvases (image
+			// viewers, maps, canvases) can implement wheel/trackpad zoom and
+			// pan. Format: 'scroll:<cursor_x>:<cursor_y>:<delta_y>'.
+			fire_event('scroll:${x}:${y}:${delta_y}')
 			return
 		}
 		apply_scroll_chain(scroll_ancestor_chain(id), -delta_y * 48)
