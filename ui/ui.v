@@ -369,6 +369,7 @@ pub:
 	clickable             bool // view/image: emit pointer down/up events
 	draggable             bool // view/image: emit pointer drag events
 	rotation              f64 // image: clockwise degrees
+	pixelated             bool // image: sample with nearest-neighbor when magnified (crisp pixels)
 	cursor                string // view/image: hover cursor hint
 	menu                  []MenuEntry
 	children              []Element
@@ -652,6 +653,16 @@ pub fn transformed_image_with_cursor(id string, path string, frame Rect, rotatio
 		rotation: rotation
 		clickable: clickable
 		cursor: cursor
+	}
+}
+
+// with_pixelated renders an image with nearest-neighbor sampling when
+// magnified, keeping magnified pixels crisp instead of bilinear-blurred.
+// Suited to image viewers and pixel-art surfaces above 100% zoom.
+pub fn with_pixelated(el Element) Element {
+	return Element{
+		...el
+		pixelated: true
 	}
 }
 

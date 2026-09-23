@@ -9,6 +9,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	import gg
 	import math
 	import os
+	import sokol.gfx
 	import sokol.sapp
 	import time
 
@@ -144,6 +145,12 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_dropdown_popup = DropdownPopup{}
 	__global g_dropdown_hover = -1
 	__global g_dropdown_scroll = 0.0
+	// Long-lived shared samplers for image magnification filtering. They are
+	// created once on first use and never destroyed: sokol's sampler pool is
+	// small, so per-draw samplers would exhaust it.
+	__global g_shared_samplers_init = false
+	__global g_shared_sampler_linear = gfx.Sampler{}
+	__global g_shared_sampler_nearest = gfx.Sampler{}
 
 	// Map values are copied byte-for-byte when an existing key is replaced.
 	// Unlike keys, their nested strings are not released by map.set. The text
@@ -1750,7 +1757,7 @@ fn page_focused_text_area(direction int) {
 				y := el.frame.y + off_y
 				if el.image_path.trim_space().len > 0
 					&& !draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
-					el.rotation) {
+					el.rotation, el.pixelated) {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
 				}
 				if el.enabled && element_action_id(el).len > 0 && (el.clickable || el.draggable) {
@@ -2206,13 +2213,60 @@ fn page_focused_text_area(direction int) {
 		}
 	}
 
-	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64) bool {
-		if !cache_image(path) { return false }
+	// shared_image_sampler returns one of the two long-lived shared samplers
+	// used to switch image magnification filtering without allocating per
+	// draw. The samplers are created lazily inside the draw pass, when sokol
+	// gfx is guaranteed to be initialized, and are never destroyed.
+	fn shared_image_sampler(nearest bool) gfx.Sampler {
+		if !g_shared_samplers_init {
+			mut linear_desc := gfx.SamplerDesc{
+				min_filter:    .linear
+				mag_filter:    .linear
+				mipmap_filter: .linear
+				wrap_u:        .clamp_to_edge
+				wrap_v:        .clamp_to_edge
+			}
+			g_shared_sampler_linear = gfx.make_sampler(&linear_desc)
+			mut nearest_desc := gfx.SamplerDesc{
+				min_filter:    .nearest
+				mag_filter:    .nearest
+				mipmap_filter: .linear
+				wrap_u:        .clamp_to_edge
+				wrap_v:        .clamp_to_edge
+			}
+			g_shared_sampler_nearest = gfx.make_sampler(&nearest_desc)
+			g_shared_samplers_init = true
+		}
+		return if nearest { g_shared_sampler_nearest } else { g_shared_sampler_linear }
+	}
+
+	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool) bool {
+		if !cache_image(path) {
+			return false
+		}
 		image_id := g_image_ids[path] or { return false }
 		mut image_ctx := g_gg_app.ctx
-		cached_image := image_ctx.get_cached_image_by_idx(image_id)
+		mut cached_image := image_ctx.get_cached_image_by_idx(image_id)
 		if !cached_image.ok {
 			return false
+		}
+		if pixelated {
+			// Swap in the shared nearest sampler for this draw only so other
+			// elements sharing the cached image keep their own filtering.
+			prev_ssmp := cached_image.ssmp
+			cached_image.ssmp = shared_image_sampler(true)
+			ctx.draw_image_with_config(
+				img: cached_image
+				img_rect: gg.Rect{
+					x: f32(x)
+					y: f32(y)
+					width: f32(width)
+					height: f32(height)
+				}
+				rotation: f32(-rotation)
+			)
+			cached_image.ssmp = prev_ssmp
+			return true
 		}
 		ctx.draw_image_with_config(
 			img: cached_image
@@ -2288,7 +2342,7 @@ fn page_focused_text_area(direction int) {
 			})
 			return
 		}
-		if !draw_cached_image(ctx, image_path, x, y, width, height, 0) {
+		if !draw_cached_image(ctx, image_path, x, y, width, height, 0, false) {
 			draw_outline(ctx, x, y, width, height, 0x94a3b8, 2)
 		}
 	}
