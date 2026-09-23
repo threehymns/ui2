@@ -369,6 +369,8 @@ pub:
 	clickable             bool // view/image: emit pointer down/up events
 	draggable             bool // view/image: emit pointer drag events
 	rotation              f64 // image: clockwise degrees
+	flip_h                bool // image: mirror horizontally on screen
+	flip_v                bool // image: mirror vertically on screen
 	pixelated             bool // image: sample with nearest-neighbor when magnified (crisp pixels)
 	cursor                string // view/image: hover cursor hint
 	menu                  []MenuEntry
@@ -653,6 +655,22 @@ pub fn transformed_image_with_cursor(id string, path string, frame Rect, rotatio
 		rotation: rotation
 		clickable: clickable
 		cursor: cursor
+	}
+}
+
+// with_flip_h mirrors an image horizontally on screen.
+pub fn with_flip_h(el Element) Element {
+	return Element{
+		...el
+		flip_h: true
+	}
+}
+
+// with_flip_v mirrors an image vertically on screen.
+pub fn with_flip_v(el Element) Element {
+	return Element{
+		...el
+		flip_v: true
 	}
 }
 

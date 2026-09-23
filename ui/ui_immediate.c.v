@@ -1757,7 +1757,7 @@ fn page_focused_text_area(direction int) {
 				y := el.frame.y + off_y
 				if el.image_path.trim_space().len > 0
 					&& !draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
-					el.rotation, el.pixelated) {
+					el.rotation, el.pixelated, el.flip_h, el.flip_v) {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
 				}
 				if el.enabled && element_action_id(el).len > 0 && (el.clickable || el.draggable) {
@@ -2240,7 +2240,20 @@ fn page_focused_text_area(direction int) {
 		return if nearest { g_shared_sampler_nearest } else { g_shared_sampler_linear }
 	}
 
-	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool) bool {
+	// image_texture_flips maps screen-space mirroring to the texture-space
+	// flip flags gg applies. Rotation swaps the local axes, so at 90/270
+	// degrees a horizontal screen mirror samples the texture vertically and
+	// vice versa.
+	fn image_texture_flips(rotation f64, flip_h bool, flip_v bool) (bool, bool) {
+		norm_rot := int(math.fmod(rotation, 360.0))
+		positive_rot := (norm_rot % 360 + 360) % 360
+		if positive_rot == 90 || positive_rot == 270 {
+			return flip_v, flip_h
+		}
+		return flip_h, flip_v
+	}
+
+	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
 		if !cache_image(path) {
 			return false
 		}
@@ -2250,6 +2263,7 @@ fn page_focused_text_area(direction int) {
 		if !cached_image.ok {
 			return false
 		}
+		flip_x, flip_y := image_texture_flips(rotation, flip_h, flip_v)
 		if pixelated {
 			// Swap in the shared nearest sampler for this draw only so other
 			// elements sharing the cached image keep their own filtering.
@@ -2264,6 +2278,8 @@ fn page_focused_text_area(direction int) {
 					height: f32(height)
 				}
 				rotation: f32(-rotation)
+				flip_x:   flip_x
+				flip_y:   flip_y
 			)
 			cached_image.ssmp = prev_ssmp
 			return true
@@ -2277,6 +2293,8 @@ fn page_focused_text_area(direction int) {
 				height: f32(height)
 			}
 			rotation: f32(-rotation)
+			flip_x:   flip_x
+			flip_y:   flip_y
 		)
 		return true
 	}
@@ -2342,7 +2360,7 @@ fn page_focused_text_area(direction int) {
 			})
 			return
 		}
-		if !draw_cached_image(ctx, image_path, x, y, width, height, 0, false) {
+		if !draw_cached_image(ctx, image_path, x, y, width, height, 0, false, false, false) {
 			draw_outline(ctx, x, y, width, height, 0x94a3b8, 2)
 		}
 	}
