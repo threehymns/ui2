@@ -78,6 +78,22 @@ fn positive_pattern_remainder(value f64, modulus f64) f64 {
 	return result
 }
 
+pub fn pattern_source_offset(origin f64, screen_origin f64, tile_size f64, pixel_size int) int {
+	if tile_size <= 0 || pixel_size <= 0 {
+		return 0
+	}
+	scale := f64(pixel_size) / tile_size
+	offset := int(positive_pattern_remainder(screen_origin - origin, tile_size) * scale)
+	return ((offset % pixel_size) + pixel_size) % pixel_size
+}
+
+pub fn first_pattern_tile_origin(clip_origin f64, phase f64, tile_size f64) f64 {
+	if tile_size <= 0 {
+		return 0
+	}
+	return math.floor((clip_origin - phase) / tile_size) * tile_size + phase
+}
+
 pub fn (background PatternBackground) visible_rect(parent_x f64, parent_y f64, frame Rect, parent_clip Rect) Rect {
 	if !background.pattern.valid() {
 		return Rect{}

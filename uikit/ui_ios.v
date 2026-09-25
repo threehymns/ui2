@@ -2,7 +2,6 @@ module ui2
 
 import ios
 import macos
-import math
 
 #flag -framework CoreGraphics
 
@@ -179,9 +178,9 @@ fn native_cgimage_from_rgba(width int, height int, pixels []u8) voidptr {
 pub fn bounds() Rect {
 	b := macos.msg_rect(macos.msg_id(macos.get_class('UIScreen'), 'mainScreen'), 'bounds')
 	return Rect{
-		x: b.x
-		y: b.y
-		width: b.width
+		x:      b.x
+		y:      b.y
+		width:  b.width
 		height: b.height
 	}
 }
@@ -782,17 +781,12 @@ fn native_set_image_transform(image_view View, frame Rect, rotation f64, flip_h 
 	native_set_view_rotation(image_view, 0)
 	macos.msg_void_rect(image_view, 'setFrame:', native_rect(frame))
 	macos.msg_void_i64(image_view, 'setContentMode:', 1)
-	mut norm := int(rotation) % 360
-	if norm < 0 {
-		norm += 360
-	}
-	mut flip_x := flip_h
-	mut flip_y := flip_v
-	if norm == 90 || norm == 270 {
-		flip_x = flip_v
-		flip_y = flip_h
-	}
-	native_set_layer_scale(image_view, if flip_x { -1.0 } else { 1.0 }, if flip_y { -1.0 } else { 1.0 })
+	flip_x, flip_y := image_texture_flips(rotation, flip_h, flip_v)
+	native_set_layer_scale(image_view, if flip_x { -1.0 } else { 1.0 }, if flip_y {
+		-1.0
+	} else {
+		1.0
+	})
 	native_set_view_rotation(image_view, rotation)
 }
 
@@ -941,9 +935,9 @@ fn vui_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
 }
 
 fn native_draw_pattern_tiles(context voidptr, image voidptr, pattern NativePatternState, clip Rect) {
-	mut x := math.floor((clip.x - pattern.phase_x) / pattern.tile_w) * pattern.tile_w + pattern.phase_x
+	mut x := first_pattern_tile_origin(clip.x, pattern.phase_x, pattern.tile_w)
 	for x < clip.x + clip.width {
-		mut y := math.floor((clip.y - pattern.phase_y) / pattern.tile_h) * pattern.tile_h + pattern.phase_y
+		mut y := first_pattern_tile_origin(clip.y, pattern.phase_y, pattern.tile_h)
 		for y < clip.y + clip.height {
 			C.CGContextDrawImage(context, macos.rect(x, y, pattern.tile_w, pattern.tile_h), image)
 			y += pattern.tile_h

@@ -8,7 +8,7 @@ pub enum StartupPhase {
 	window_creation
 	font_work
 	ui2_setup
-	gpu_setup
+	gpu_context_initialization
 	first_content
 	first_input
 	directory_completion
@@ -44,10 +44,14 @@ pub fn trace_frame_complete() {
 }
 
 pub fn trace_startup_phase(phase StartupPhase) {
+	trace_startup_phase_at(phase, time.sys_mono_now())
+}
+
+pub fn trace_startup_phase_at(phase StartupPhase, at_ns u64) {
 	if voidptr(g_startup_phase_handler) == unsafe { nil } {
 		return
 	}
-	g_startup_phase_handler(phase, time.sys_mono_now())
+	g_startup_phase_handler(phase, at_ns)
 }
 
 pub fn startup_phase_name(phase StartupPhase) string {
@@ -56,7 +60,7 @@ pub fn startup_phase_name(phase StartupPhase) string {
 		.window_creation { 'window_creation' }
 		.font_work { 'font_work' }
 		.ui2_setup { 'ui2_setup' }
-		.gpu_setup { 'gpu_setup' }
+		.gpu_context_initialization { 'gpu_context_initialization' }
 		.first_content { 'first_content' }
 		.first_input { 'first_input' }
 		.directory_completion { 'directory_completion' }

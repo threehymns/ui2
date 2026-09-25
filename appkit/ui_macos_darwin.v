@@ -7,7 +7,6 @@ $if !ui2_custom_rendering ? {
 
 import encoding.base64
 import macos
-import math
 import os
 import time
 
@@ -1999,16 +1998,7 @@ fn native_set_image_transform(image_view NativeView, frame NativeRect, rotation 
 	native_view_reset_transform(image_view)
 	native_set_frame(image_view, frame)
 	macos.msg_void_i64(image_view, 'setImageScaling:', 3)
-	mut norm := int(rotation) % 360
-	if norm < 0 {
-		norm += 360
-	}
-	mut flip_x := flip_h
-	mut flip_y := flip_v
-	if norm == 90 || norm == 270 {
-		flip_x = flip_v
-		flip_y = flip_h
-	}
+	flip_x, flip_y := image_texture_flips(rotation, flip_h, flip_v)
 	native_set_layer_scale(image_view, if flip_x { -1.0 } else { 1.0 }, if flip_y { -1.0 } else { 1.0 })
 	if rotation < -0.001 || rotation > 0.001 {
 		native_view_set_rotation(image_view, rotation)
@@ -2178,9 +2168,9 @@ fn ui2_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
 }
 
 fn native_draw_pattern_tiles(context voidptr, image voidptr, pattern NativePatternState, clip Rect) {
-	mut x := math.floor((clip.x - pattern.phase_x) / pattern.tile_w) * pattern.tile_w + pattern.phase_x
+	mut x := first_pattern_tile_origin(clip.x, pattern.phase_x, pattern.tile_w)
 	for x < clip.x + clip.width {
-		mut y := math.floor((clip.y - pattern.phase_y) / pattern.tile_h) * pattern.tile_h + pattern.phase_y
+		mut y := first_pattern_tile_origin(clip.y, pattern.phase_y, pattern.tile_h)
 		for y < clip.y + clip.height {
 			C.CGContextDrawImage(context, macos.rect(x, y, pattern.tile_w, pattern.tile_h), image)
 			y += pattern.tile_h

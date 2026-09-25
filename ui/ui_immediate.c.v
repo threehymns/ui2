@@ -285,7 +285,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_font_metrics = if g_font_resource.ready { g_font_resource.metrics } else { FontMetrics{} }
 		g_font_work_started = g_font_resource.ready
 		g_first_frame_complete = false
+		trace_startup_phase(.ui2_setup)
 		font_regular, font_bold := startup_font_paths()
+		trace_startup_phase(.window_creation)
 		g_gg_app.ctx = gg.new_context(
 			bg_color: hex_color(0xf4f6f8)
 			font_path: font_regular
@@ -305,7 +307,6 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			max_dropped_files: 32
 			max_dropped_file_path_length: 4096
 		)
-		trace_startup_phase(.ui2_setup)
 		start_font_work()
 		g_gg_app.ctx.run()
 	}
@@ -595,8 +596,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	// ── Frame & event loop ─────────────────────────────────────────────
 
 	fn on_init(_ &GgApp) {
-		trace_startup_phase(.window_creation)
-		trace_startup_phase(.gpu_setup)
+		trace_startup_phase(.gpu_context_initialization)
 	}
 
 	fn on_frame(app &GgApp) {

@@ -3,10 +3,10 @@ module ui2
 $if !ui2_custom_rendering ? {
 	fn windows_test_ready_resource(id string, opacity ImageOpacity) ImageResource {
 		return ready_image_resource(id, 'sample.png', ImageResourceInput{
-			width: 2
-			height: 1
+			width:    2
+			height:   1
 			channels: 4
-			pixels: []u8{len: 8, init: 255}
+			pixels:   []u8{len: 8, init: 255}
 		}, opacity)
 	}
 
@@ -27,13 +27,34 @@ $if !ui2_custom_rendering ? {
 		}
 	}
 
+	fn windows_test_repeat_pattern_32() RepeatPattern {
+		mut pixels := []u8{len: 32 * 32 * 4, init: 255}
+		pixels[4 * 4] = 0
+		pixels[4 * 4 + 1] = 255
+		pixels[4 * 4 + 2] = 0
+		pixels[28 * 4] = 0
+		pixels[28 * 4 + 1] = 0
+		pixels[28 * 4 + 2] = 255
+		return RepeatPattern{
+			id:           'windows-pattern-32'
+			tile_width:   32
+			tile_height:  32
+			pixel_width:  32
+			pixel_height: 32
+			channels:     4
+			pixels:       pixels
+		}
+	}
+
 	fn test_windows_image_modes_preserve_states_and_legacy_paths() {
 		loading := transformed_image_resource('loading', loading_image_resource('loading-id',
 			'pending.png'), rect(0, 0, 20, 10), 0, false)
 		assert windows_image_mode(loading) == .pending
+		assert windows_image_action(windows_image_mode(loading)) == .retain
 		failed := transformed_image_resource('error', error_image_resource('error-id',
 			'broken.png', 'decode failed'), rect(0, 0, 20, 10), 0, false)
 		assert windows_image_mode(failed) == .pending
+		assert windows_image_action(windows_image_mode(failed)) == .retain
 		for opacity in [ImageOpacity.unknown, .proven_opaque, .has_alpha] {
 			ready := transformed_image_resource('ready', windows_test_ready_resource('ready-id',
 				opacity), rect(0, 0, 20, 10), 0, false)
@@ -79,8 +100,14 @@ $if !ui2_custom_rendering ? {
 
 		fn test_windows_decoded_bitmap_alpha_composites_over_existing_pixels() {
 			pixels := [
-				u8(255), u8(0), u8(0), u8(128),
-				u8(0), u8(255), u8(0), u8(128),
+				u8(255),
+				u8(0),
+				u8(0),
+				u8(128),
+				u8(0),
+				u8(255),
+				u8(0),
+				u8(128),
 			]
 			bitmap := C.ui2_win_create_rgba_bitmap(voidptr(pixels.data), 2, 1)
 			dc := C.ui2_win_create_test_dc(2, 1)
@@ -105,10 +132,53 @@ $if !ui2_custom_rendering ? {
 			assert windows_test_channel(green_over_blue, 0) <= 136
 		}
 
+		fn test_windows_pending_and_error_resources_retain_previous_bitmap() {
+			assert C.ui2_win_register_classes() != 0
+			title := 'image retain test'.to_wide()
+			root := C.ui2_win_create_main_window(title, 64, 64)
+			unsafe {
+				free(title)
+			}
+			assert root != unsafe { nil }
+			empty := ''.to_wide()
+			hwnd := C.ui2_win_create_widget(windows_widget_kind(.image), root, 0, 0, 32,
+				32, empty, 0, 0, 0, 0, 0)
+			unsafe {
+				free(empty)
+			}
+			assert hwnd != unsafe { nil }
+			defer {
+				windows_cleanup_node_resources('retain-image', hwnd, .image)
+				C.ui2_win_destroy(root)
+			}
+			ready := transformed_image_resource('retain-image',
+				windows_test_ready_resource('retain-ready', .proven_opaque), rect(0, 0, 32, 32),
+				0, false)
+			windows_update_element('retain-image', hwnd, ready, 0, true)
+			retained := C.ui2_win_get_bitmap(hwnd)
+			assert retained != unsafe { nil }
+			loading := transformed_image_resource('retain-image',
+				loading_image_resource('retain-loading', 'pending.png'), rect(0, 0, 32, 32),
+				0, false)
+			windows_update_element('retain-image', hwnd, loading, 0, false)
+			assert C.ui2_win_get_bitmap(hwnd) == retained
+			failed := transformed_image_resource('retain-image',
+				error_image_resource('retain-error', 'pending.png', 'failed'), rect(0, 0, 32, 32),
+				0, false)
+			windows_update_element('retain-image', hwnd, failed, 0, false)
+			assert C.ui2_win_get_bitmap(hwnd) == retained
+		}
+
 		fn test_windows_decoded_bitmap_preserves_rotation_and_filtering() {
 			pixels := [
-				u8(255), u8(0), u8(0), u8(255),
-				u8(0), u8(255), u8(0), u8(255),
+				u8(255),
+				u8(0),
+				u8(0),
+				u8(255),
+				u8(0),
+				u8(255),
+				u8(0),
+				u8(255),
 			]
 			bitmap := C.ui2_win_create_rgba_bitmap(voidptr(pixels.data), 2, 1)
 			assert bitmap != unsafe { nil }
@@ -147,7 +217,7 @@ $if !ui2_custom_rendering ? {
 		fn test_windows_repeat_pattern_phase_clipping_and_resize() {
 			assert C.ui2_win_register_classes() != 0
 			title := 'pattern test'.to_wide()
-			root := C.ui2_win_create_main_window(title, 96, 96)
+			root := C.ui2_win_create_main_window(title, 160, 128)
 			unsafe {
 				free(title)
 			}
@@ -170,7 +240,7 @@ $if !ui2_custom_rendering ? {
 				pattern.pixels.len, pattern.pixel_width, pattern.pixel_height,
 				pattern.tile_width, pattern.tile_height, pattern.origin_x,
 				pattern.origin_y) != 0
-			dc := C.ui2_win_create_test_dc(96, 96)
+			dc := C.ui2_win_create_test_dc(160, 128)
 			assert dc != unsafe { nil }
 			defer {
 				C.ui2_win_delete_test_dc(dc)
@@ -189,6 +259,18 @@ $if !ui2_custom_rendering ? {
 			assert windows_test_channel(C.ui2_win_test_pixel(dc, 3, 5), 16) == 255
 			assert windows_test_channel(C.ui2_win_test_pixel(dc, 32, 34), 16) == 255
 			assert C.ui2_win_test_pixel(dc, 33, 34) == 0
+
+			C.ui2_win_set_frame(pattern_hwnd, 100, 60, 32, 32)
+			phase_pattern := windows_test_repeat_pattern_32()
+			assert C.ui2_win_set_repeat_pattern(pattern_hwnd, voidptr(phase_pattern.pixels.data),
+				phase_pattern.pixels.len, phase_pattern.pixel_width, phase_pattern.pixel_height,
+				phase_pattern.tile_width, phase_pattern.tile_height, phase_pattern.origin_x,
+				phase_pattern.origin_y) != 0
+			C.ui2_win_test_clear(dc)
+			assert C.ui2_win_paint_repeat_pattern(dc, pattern_hwnd, root) != 0
+			phase_pixel := C.ui2_win_test_pixel(dc, 100, 60)
+			assert windows_test_channel(phase_pixel, 8) > 200
+			assert windows_test_channel(phase_pixel, 16) < 50
 		}
 	}
 
@@ -220,7 +302,7 @@ $if !ui2_custom_rendering ? {
 			kind: .text_field
 		}
 		secure := Element{
-			kind: .text_field
+			kind:   .text_field
 			secure: true
 		}
 		assert windows_structural_signature(plain) != windows_structural_signature(secure)
@@ -229,13 +311,13 @@ $if !ui2_custom_rendering ? {
 			kind: .text_area
 		}
 		area_without_scroll := Element{
-			kind: .text_area
+			kind:           .text_area
 			disable_scroll: true
 		}
 		assert windows_structural_signature(area) != windows_structural_signature(area_without_scroll)
 
 		styled_button := Element{
-			kind: .button
+			kind:         .button
 			native_style: true
 		}
 		plain_button := Element{
@@ -247,7 +329,7 @@ $if !ui2_custom_rendering ? {
 			kind: .slider
 		}
 		vertical_slider := Element{
-			kind: .slider
+			kind:        .slider
 			orientation: .vertical
 		}
 		assert windows_structural_signature(horizontal_slider) != windows_structural_signature(vertical_slider)
@@ -256,11 +338,11 @@ $if !ui2_custom_rendering ? {
 	fn test_windows_scroll_content_height_uses_child_extent() {
 		children := [
 			Element{
-				kind: .label
+				kind:  .label
 				frame: rect(0, 10, 50, 20)
 			},
 			Element{
-				kind: .button
+				kind:  .button
 				frame: rect(0, 80, 50, 35)
 			},
 		]
@@ -309,8 +391,8 @@ $if !ui2_custom_rendering ? {
 
 	fn test_windows_font_text_covers_every_string_a_control_draws() {
 		field := Element{
-			kind: .text_field
-			text: 'Andr\u00e9'
+			kind:        .text_field
+			text:        'Andr\u00e9'
 			placeholder: 'Name'
 		}
 		assert windows_font_text(field) == 'Andr\u00e9Name'
@@ -319,7 +401,7 @@ $if !ui2_custom_rendering ? {
 			kind: .dropdown
 			text: 'one'
 			menu: [MenuEntry{
-				id: 'two'
+				id:    'two'
 				title: '\u2713 two'
 			}]
 		}
@@ -330,7 +412,7 @@ $if !ui2_custom_rendering ? {
 			kind: .button
 			text: 'Create'
 			menu: [MenuEntry{
-				id: 'copy'
+				id:    'copy'
 				title: 'Copy'
 			}]
 		}

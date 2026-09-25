@@ -1284,6 +1284,9 @@ static inline void *ui2_win_set_decoded_bitmap(void *hwnd_ptr,
 	HWND hwnd = (HWND)hwnd_ptr;
 	if (hwnd == NULL) return NULL;
 	HBITMAP image = ui2_win_create_rgba_bitmap(pixels, width, height);
+	if (image == NULL) {
+		return SendMessageW(hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+	}
 	HBITMAP old = (HBITMAP)SendMessageW(hwnd, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)image);
 	if (old != NULL && old != image) DeleteObject(old);
 	return image;
@@ -1299,6 +1302,9 @@ static inline void *ui2_win_set_bitmap(void *hwnd_ptr, const wchar_t *path,
 			width > 0 ? width : 0, height > 0 ? height : 0,
 			LR_LOADFROMFILE | LR_CREATEDIBSECTION);
 	}
+	if (image == NULL) {
+		return SendMessageW(hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+	}
 	HBITMAP old = (HBITMAP)SendMessageW(hwnd, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)image);
 	if (old != NULL && old != image) DeleteObject(old);
 	return image;
@@ -1309,6 +1315,12 @@ static inline void ui2_win_clear_bitmap(void *hwnd_ptr) {
 	if (hwnd == NULL) return;
 	HBITMAP old = (HBITMAP)SendMessageW(hwnd, STM_SETIMAGE, IMAGE_BITMAP, 0);
 	if (old != NULL) DeleteObject(old);
+}
+
+static inline void *ui2_win_get_bitmap(void *hwnd_ptr) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return NULL;
+	return SendMessageW(hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
 }
 
 typedef struct ui2_win_repeat_binding {
@@ -1412,15 +1424,12 @@ static inline int ui2_win_paint_repeat_pattern(void *dc_ptr, void *pattern_ptr,
 	int right = corners[1].x;
 	int bottom = corners[1].y;
 	if (left >= right || top >= bottom) return 0;
-	HWND root = GetAncestor(pattern_hwnd, GA_ROOT);
-	POINT root_position = {0, 0};
-	MapWindowPoints(pattern_hwnd, root, &root_position, 1);
 	double x_scale = (double)binding->pixel_width / binding->tile_width;
 	double y_scale = (double)binding->pixel_height / binding->tile_height;
-	int source_x = (int)(ui2_win_positive_mod((double)root_position.x -
-		binding->origin_x, binding->tile_width) * x_scale) % binding->pixel_width;
-	int source_y = (int)(ui2_win_positive_mod((double)root_position.y -
-		binding->origin_y, binding->tile_height) * y_scale) % binding->pixel_height;
+	int source_x = (int)(ui2_win_positive_mod((double)left - binding->origin_x,
+		binding->tile_width) * x_scale) % binding->pixel_width;
+	int source_y = (int)(ui2_win_positive_mod((double)top - binding->origin_y,
+		binding->tile_height) * y_scale) % binding->pixel_height;
 	if (fabs(x_scale - 1.0) < 0.000001 && fabs(y_scale - 1.0) < 0.000001) {
 		int pattern_saved = SaveDC(dc);
 		IntersectClipRect(dc, left, top, right, bottom);

@@ -88,6 +88,11 @@ fn test_repeat_pattern_phase_is_anchored_to_window_origin() {
 	assert moved.y == 14
 }
 
+fn test_repeat_pattern_source_offset_uses_forward_arbitrary_position() {
+	assert pattern_source_offset(0, 100, 32, 32) == 4
+	assert first_pattern_tile_origin(100, 4, 32) == 100
+}
+
 fn test_repeat_pattern_source_rect_honors_logical_tile_scale() {
 	mut pattern := repeat_pattern_test_pattern()
 	pattern.tile_width = 32

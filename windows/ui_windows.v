@@ -157,6 +157,7 @@ fn C.ui2_win_test_clear(dc voidptr)
 fn C.ui2_win_delete_test_dc(dc voidptr)
 
 fn C.ui2_win_clear_bitmap(hwnd voidptr)
+fn C.ui2_win_get_bitmap(hwnd voidptr) voidptr
 
 fn C.ui2_win_set_scroll(hwnd voidptr, content_height int, position int) int
 
@@ -243,6 +244,12 @@ enum WindowsImageMode {
 	legacy
 	decoded
 	pending
+}
+
+enum WindowsImageAction {
+	replace
+	retain
+	clear
 }
 
 struct WindowsImageOptions {
@@ -387,6 +394,14 @@ fn windows_image_mode(el Element) WindowsImageMode {
 		return .legacy
 	}
 	return .none
+}
+
+fn windows_image_action(mode WindowsImageMode) WindowsImageAction {
+	return match mode {
+		.decoded, .legacy { .replace }
+		.pending { .retain }
+		.none { .clear }
+	}
 }
 
 fn windows_image_resource_signature(el Element) string {
@@ -1207,27 +1222,30 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 			st.node_image_options[key] = windows_image_options(el)
 			image_sig := windows_image_resource_signature(el)
 			if created || (st.node_image_path[key] or { '' }) != image_sig {
-				mut bitmap := voidptr(unsafe { nil })
-				match mode {
-					.decoded {
-						pixels := el.image_resource.decoded_pixels()
-						bitmap = C.ui2_win_set_decoded_bitmap(hwnd, voidptr(pixels.data),
-							el.image_resource.width(), el.image_resource.height())
+				match windows_image_action(mode) {
+					.replace {
+						mut bitmap := voidptr(unsafe { nil })
+						if mode == .decoded {
+							pixels := el.image_resource.decoded_pixels()
+							bitmap = C.ui2_win_set_decoded_bitmap(hwnd, voidptr(pixels.data),
+								el.image_resource.width(), el.image_resource.height())
+						} else {
+							wide_path := el.image_path.to_wide()
+							bitmap = C.ui2_win_set_bitmap(hwnd, wide_path, int(el.frame.width),
+								int(el.frame.height))
+							unsafe { free(wide_path) }
+						}
+						if bitmap == unsafe { nil } {
+							st.images.delete(key)
+						} else {
+							st.images[key] = bitmap
+						}
 					}
-					.legacy {
-						wide_path := el.image_path.to_wide()
-						bitmap = C.ui2_win_set_bitmap(hwnd, wide_path, int(el.frame.width),
-							int(el.frame.height))
-						unsafe { free(wide_path) }
-					}
-					else {
+					.retain {}
+					.clear {
 						C.ui2_win_clear_bitmap(hwnd)
+						st.images.delete(key)
 					}
-				}
-				if bitmap == unsafe { nil } {
-					st.images.delete(key)
-				} else {
-					st.images[key] = bitmap
 				}
 				st.node_image_path[key] = image_sig
 			}
