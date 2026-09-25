@@ -114,6 +114,11 @@ fn test_repeat_pattern_clip_intersects_image_reveal_and_resize() {
 	assert second == rect(220, 160, 80, 40)
 }
 
+fn test_repeat_pattern_local_clip_is_shared_by_native_backends() {
+	assert pattern_local_clip(rect(100, 80, 64, 48), 100, 80, rect(0, 0, 64, 48)) == rect(0, 0, 64, 48)
+	assert pattern_local_clip(rect(100, 80, 64, 48), 116, 96, rect(0, 0, 64, 48)) == rect(0, 0, 48, 32)
+}
+
 fn test_repeat_pattern_element_keeps_tile_when_clip_and_frame_change() {
 	pattern := repeat_pattern_test_pattern()
 	first := pattern_background('pattern', pattern, rect(100, 80, 64, 48))

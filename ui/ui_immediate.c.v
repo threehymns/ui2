@@ -147,6 +147,8 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_first_frame_complete = false
 	__global g_active_images = map[string]bool{}
 	__global g_active_image_resources = map[string]bool{}
+	__global g_image_element_resources = map[string]ImageResource{}
+	__global g_active_image_elements = map[string]bool{}
 	__global g_open_dropdown = ''
 	__global g_dropdown_popup = DropdownPopup{}
 	__global g_dropdown_hover = -1
@@ -633,6 +635,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			g_active_scrolls = map[string]bool{}
 			g_active_images = map[string]bool{}
 			g_active_image_resources = map[string]bool{}
+			g_active_image_elements = map[string]bool{}
 			root = apply_widget_animations(g_build_screen())
 			validate_element_tree(root) or {
 				eprintln('ui2: ${err}')
@@ -1708,9 +1711,25 @@ fn page_focused_text_area(direction int) {
 			image_ctx.remove_cached_image_by_idx(image_id)
 			g_image_resource_ids.delete(id)
 		}
+		mut stale_image_elements := []string{}
+		for id, _ in g_image_element_resources {
+			if id !in g_active_image_elements {
+				stale_image_elements << id
+			}
+		}
+		for id in stale_image_elements {
+			g_image_element_resources.delete(id)
+		}
 	}
 
 	// ── Rendering ──────────────────────────────────────────────────────
+
+	fn custom_image_resource_for_element(current ImageResource, previous ImageResource) ImageResource {
+		if current.id.len > 0 && current.state != .ready && previous.state == .ready {
+			return previous
+		}
+		return current
+	}
 
 	fn render_element(ctx &gg.Context, el Element, off_x f64, off_y f64, clip Rect, scroll_parent_id string) {
 		if el.hidden {
@@ -1802,17 +1821,40 @@ fn page_focused_text_area(direction int) {
 			.image {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
-				if el.image_resource.id.len > 0 {
-					if el.image_resource.state == .ready
-						&& !draw_cached_image_resource(ctx, el.image_resource, x, y,
-						el.frame.width, el.frame.height, el.rotation, el.pixelated,
-						el.flip_h, el.flip_v) {
-						draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
+				image_key := if el.id.len > 0 {
+					el.id
+				} else if el.image_resource.id.len > 0 {
+					el.image_resource.id
+				} else {
+					el.image_path
+				}
+				if image_key.len > 0 {
+					g_active_image_elements[image_key] = true
+				}
+				previous := g_image_element_resources[image_key] or { ImageResource{} }
+				resource := custom_image_resource_for_element(el.image_resource, previous)
+				mut drew := false
+				if resource.id.len > 0 {
+					if resource.state == .ready {
+						drew = draw_cached_image_resource(ctx, resource, x, y, el.frame.width,
+							el.frame.height, el.rotation, el.pixelated, el.flip_h, el.flip_v)
 					}
-				} else if el.image_path.trim_space().len > 0
-					&& !draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
-					el.rotation, el.pixelated, el.flip_h, el.flip_v) {
+				} else if el.image_path.trim_space().len > 0 {
+					drew = draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
+						el.rotation, el.pixelated, el.flip_h, el.flip_v)
+				}
+				if resource.id.len > 0 && resource.state == .ready && !drew
+					&& previous.id.len > 0 && previous.state == .ready {
+					drew = draw_cached_image_resource(ctx, previous, x, y, el.frame.width,
+						el.frame.height, el.rotation, el.pixelated, el.flip_h, el.flip_v)
+				}
+				if !drew && el.image_resource.id.len == 0 && el.image_path.trim_space().len > 0 {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
+				}
+				if el.image_resource.id.len > 0 && el.image_resource.state == .ready && drew {
+					g_image_element_resources[image_key] = el.image_resource
+				} else if el.image_resource.id.len == 0 {
+					g_image_element_resources.delete(image_key)
 				}
 				if el.enabled && element_action_id(el).len > 0 && (el.clickable || el.draggable) {
 					add_hit_target(HitTarget{

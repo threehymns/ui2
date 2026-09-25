@@ -70,6 +70,15 @@ pub fn (pattern RepeatPattern) phase(frame Rect) Rect {
 	}
 }
 
+pub fn pattern_local_clip(clip Rect, frame_x f64, frame_y f64, bounds Rect) Rect {
+	return intersect_rect(bounds, Rect{
+		x:      clip.x - frame_x
+		y:      clip.y - frame_y
+		width:  clip.width
+		height: clip.height
+	})
+}
+
 fn positive_pattern_remainder(value f64, modulus f64) f64 {
 	mut result := math.fmod(value, modulus)
 	if result < 0 {

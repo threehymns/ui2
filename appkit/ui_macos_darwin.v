@@ -2138,14 +2138,9 @@ fn ui2_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
 	pattern := st.pattern_states[key] or { return }
 	image := st.pattern_images[key] or { return }
 	bounds := macos.msg_rect(self, 'bounds')
-	clip := intersect_rect(Rect{
+	clip := pattern_local_clip(pattern.clip, pattern.frame_x, pattern.frame_y, Rect{
 		width:  bounds.width
 		height: bounds.height
-	}, Rect{
-		x:      pattern.clip.x - pattern.frame_x
-		y:      pattern.clip.y - pattern.frame_y
-		width:  pattern.clip.width
-		height: pattern.clip.height
 	})
 	if clip.width <= 0 || clip.height <= 0 {
 		return
