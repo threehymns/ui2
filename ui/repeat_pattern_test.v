@@ -47,6 +47,15 @@ fn test_repeat_pattern_source_rect_keeps_window_phase() {
 	assert second.y == 1
 }
 
+fn test_repeat_pattern_visible_rect_clips_to_parent_and_reveal_region() {
+	pattern := repeat_pattern_test_pattern()
+	clip := rect(20, 30, 40, 24)
+	background := pattern_background('pattern', pattern, clip).background
+	visible := background.visible_rect(0, 0, clip, rect(0, 0, 45, 45))
+	assert visible == rect(20, 30, 25, 15)
+	assert background.visible_rect(0, 0, Rect{}, Rect{}) == Rect{}
+}
+
 fn test_repeat_pattern_rejects_invalid_tiles() {
 	mut pattern := repeat_pattern_test_pattern()
 	pattern.channels = 3

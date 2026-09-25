@@ -56,6 +56,22 @@ pub fn (pattern RepeatPattern) source_rect(frame Rect) Rect {
 	}
 }
 
+pub fn (background PatternBackground) visible_rect(parent_x f64, parent_y f64, frame Rect, parent_clip Rect) Rect {
+	if !background.pattern.valid() {
+		return Rect{}
+	}
+	mut clip := background.clip
+	if clip.width <= 0 || clip.height <= 0 {
+		clip = frame
+	}
+	visible := intersect_rect(rect(parent_x + clip.x, parent_y + clip.y, clip.width,
+		clip.height), parent_clip)
+	if visible.width <= 0 || visible.height <= 0 {
+		return Rect{}
+	}
+	return visible
+}
+
 fn repeat_pattern_cache_key(pattern RepeatPattern) string {
 	mut hash := u64(14695981039346656037)
 	for byte in pattern.pixels {
