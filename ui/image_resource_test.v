@@ -66,3 +66,57 @@ fn test_legacy_image_constructor_remains_path_compatible() {
 	assert element.image_resource.id == ''
 	assert image_path_for_element(element) == 'sample.png'
 }
+
+fn test_image_resource_contract_covers_opaque_unknown_alpha_loading_and_error() {
+	opaque := ready_image_resource('opaque', 'opaque.png', ImageResourceInput{
+		width: 1
+		height: 1
+		channels: 4
+		pixels: []u8{len: 4, init: 255}
+	}, .proven_opaque)
+	unknown := ready_image_resource('unknown', 'unknown.png', ImageResourceInput{
+		width: 1
+		height: 1
+		channels: 4
+		pixels: []u8{len: 4, init: 255}
+	}, .unknown)
+	alpha := ready_image_resource('alpha', 'alpha.png', ImageResourceInput{
+		width: 1
+		height: 1
+		channels: 4
+		pixels: []u8{len: 4, init: 255}
+	}, .has_alpha)
+	loading := loading_image_resource('loading', 'loading.png')
+	failed := error_image_resource('error', 'error.png', 'decode failed')
+	assert opaque.state == .ready
+	assert opaque.opacity == .proven_opaque
+	assert unknown.state == .ready
+	assert unknown.opacity == .unknown
+	assert alpha.state == .ready
+	assert alpha.opacity == .has_alpha
+	assert loading.state == .loading
+	assert loading.opacity == .unknown
+	assert failed.state == .error
+	assert failed.opacity == .unknown
+}
+
+fn test_image_resource_element_preserves_all_image_transform_fields() {
+	resource := ready_image_resource('resource', 'sample.png', ImageResourceInput{
+		width: 1
+		height: 1
+		channels: 4
+		pixels: []u8{len: 4, init: 255}
+	}, .has_alpha)
+	mut element := transformed_image_resource_with_cursor('photo', resource, rect(4, 5, 20, 10), 180, true, 'crosshair')
+	element = with_flip_h(element)
+	element = with_flip_v(element)
+	element = with_pixelated(element)
+	assert element.image_path == 'sample.png'
+	assert element.image_resource.id == 'resource'
+	assert element.rotation == 180
+	assert element.clickable
+	assert element.cursor == 'crosshair'
+	assert element.flip_h
+	assert element.flip_v
+	assert element.pixelated
+}
