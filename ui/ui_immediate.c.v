@@ -2289,12 +2289,7 @@ fn page_focused_text_area(direction int) {
 			return
 		}
 		image_id := g_repeat_pattern_ids[repeat_pattern_cache_key(pattern)] or { return }
-		mut pattern_clip := el.background.clip
-		if pattern_clip.width <= 0 || pattern_clip.height <= 0 {
-			pattern_clip = el.frame
-		}
-		visible := intersect_rect(rect(off_x + pattern_clip.x, off_y + pattern_clip.y,
-			pattern_clip.width, pattern_clip.height), clip)
+		visible := el.background.visible_rect(off_x, off_y, el.frame, clip)
 		if visible.width <= 0 || visible.height <= 0 {
 			return
 		}
@@ -2316,19 +2311,6 @@ fn page_focused_text_area(direction int) {
 			}
 		)
 		apply_clip(ctx, clip)
-	}
-
-	// image_texture_flips maps screen-space mirroring to the texture-space
-	// flip flags gg applies. Rotation swaps the local axes, so at 90/270
-	// degrees a horizontal screen mirror samples the texture vertically and
-	// vice versa.
-	fn image_texture_flips(rotation f64, flip_h bool, flip_v bool) (bool, bool) {
-		norm_rot := int(math.fmod(rotation, 360.0))
-		positive_rot := (norm_rot % 360 + 360) % 360
-		if positive_rot == 90 || positive_rot == 270 {
-			return flip_v, flip_h
-		}
-		return flip_h, flip_v
 	}
 
 	fn draw_cached_image_id(ctx &gg.Context, image_id int, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {

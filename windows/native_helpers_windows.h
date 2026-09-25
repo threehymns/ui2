@@ -26,11 +26,13 @@
 #include <shellapi.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <math.h>
 #include <wchar.h>
 
 #define UI2_WM_REFRESH (WM_APP + 77)
 #define UI2_WM_TRAY (WM_APP + 78)
 #define UI2_WM_PAINT_BACKGROUND (WM_APP + 79)
+#define UI2_WM_PAINT_PATTERNS (WM_APP + 80)
 
 enum {
 	UI2_WIN_VIEW = 1,
@@ -57,8 +59,10 @@ extern void ui2_windows_control_pointer(void *hwnd, unsigned int message, int x,
 extern void ui2_windows_control_border(void *hwnd);
 extern int ui2_windows_is_transparent_button(void *hwnd);
 extern int ui2_windows_paint_transparent_button(void *hwnd);
+extern int ui2_windows_paint_image(void *hwnd);
 
 static inline void ui2_win_refresh_text_font(HWND hwnd);
+static inline void ui2_win_clear_repeat_pattern(void *hwnd);
 
 static const wchar_t *ui2_win_placeholder_property(void) {
 	return L"ui2.placeholder";
@@ -151,6 +155,7 @@ static LRESULT CALLBACK ui2_win_control_subclass(HWND hwnd, UINT message, WPARAM
 		return 1;
 	}
 	if (message == WM_PAINT) {
+		if (ui2_windows_paint_image(hwnd)) return 0;
 		if (ui2_windows_paint_transparent_button(hwnd)) return 0;
 		LRESULT result = DefSubclassProc(hwnd, message, wparam, lparam);
 		ui2_win_draw_placeholder(hwnd);
@@ -184,6 +189,7 @@ static LRESULT CALLBACK ui2_win_control_subclass(HWND hwnd, UINT message, WPARAM
 	}
 	if (message == WM_NCDESTROY) {
 		ui2_win_release_placeholder(hwnd);
+		ui2_win_clear_repeat_pattern(hwnd);
 		RemoveWindowSubclass(hwnd, ui2_win_control_subclass, 1);
 	}
 	return DefSubclassProc(hwnd, message, wparam, lparam);
@@ -1135,21 +1141,16 @@ static inline void ui2_win_paint_background_into(void *hwnd_ptr, void *dc_ptr,
 	HDC dc = (HDC)dc_ptr;
 	if (hwnd == NULL || dc == NULL) return;
 
-	// UI2Container parents paint with WS_CLIPCHILDREN, so a child cannot leave
-	// clear pixels untouched. Rebuild the ancestor backdrop in this DC first;
-	// this preserves both color-key pixels and rounded ancestor boundaries.
 	HWND parent = GetParent(hwnd);
-	ui2_win_paint_parent_background(hwnd, dc);
-
+	if (parent != NULL) ui2_win_paint_parent_background(hwnd, dc);
 	RECT rect;
 	GetClientRect(hwnd, &rect);
-	if (parent == NULL && transparent) {
-		// A top-level window has no native surface to inherit from. Its declared
-		// background is the deterministic clear color (and may be a color key).
-		ui2_win_fill_background(dc, &rect, background, 0.0);
-	}
-	if (!transparent) {
+	if (parent == NULL) {
 		ui2_win_fill_background(dc, &rect, background, radius);
+		SendMessageW(hwnd, UI2_WM_PAINT_PATTERNS, (WPARAM)dc, 0);
+	} else {
+		SendMessageW(hwnd, UI2_WM_PAINT_PATTERNS, (WPARAM)dc, 0);
+		if (!transparent) ui2_win_fill_background(dc, &rect, background, radius);
 	}
 	HRGN clip = NULL;
 	if (radius > 0.5) {
@@ -1246,6 +1247,48 @@ static inline void ui2_win_invalidate_parent(void *hwnd) {
 	}
 }
 
+static inline HBITMAP ui2_win_create_rgba_bitmap(const unsigned char *pixels,
+		int width, int height) {
+	if (pixels == NULL || width <= 0 || height <= 0) return NULL;
+	BITMAPINFO info;
+	ZeroMemory(&info, sizeof(info));
+	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	info.bmiHeader.biWidth = width;
+	info.bmiHeader.biHeight = -height;
+	info.bmiHeader.biPlanes = 1;
+	info.bmiHeader.biBitCount = 32;
+	info.bmiHeader.biCompression = BI_RGB;
+	void *bits = NULL;
+	HBITMAP bitmap = CreateDIBSection(NULL, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+	if (bitmap == NULL || bits == NULL) {
+		if (bitmap != NULL) DeleteObject(bitmap);
+		return NULL;
+	}
+	unsigned char *destination = (unsigned char *)bits;
+	for (int y = 0; y < height; y++) {
+		const unsigned char *source = pixels + (size_t)y * (size_t)width * 4u;
+		unsigned char *row = destination + (size_t)y * (size_t)width * 4u;
+		for (int x = 0; x < width; x++) {
+			size_t offset = (size_t)x * 4u;
+			row[offset] = source[offset + 2];
+			row[offset + 1] = source[offset + 1];
+			row[offset + 2] = source[offset];
+			row[offset + 3] = source[offset + 3];
+		}
+	}
+	return bitmap;
+}
+
+static inline void *ui2_win_set_decoded_bitmap(void *hwnd_ptr,
+		const unsigned char *pixels, int width, int height) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return NULL;
+	HBITMAP image = ui2_win_create_rgba_bitmap(pixels, width, height);
+	HBITMAP old = (HBITMAP)SendMessageW(hwnd, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)image);
+	if (old != NULL && old != image) DeleteObject(old);
+	return image;
+}
+
 static inline void *ui2_win_set_bitmap(void *hwnd_ptr, const wchar_t *path,
 		int width, int height) {
 	HWND hwnd = (HWND)hwnd_ptr;
@@ -1266,6 +1309,424 @@ static inline void ui2_win_clear_bitmap(void *hwnd_ptr) {
 	if (hwnd == NULL) return;
 	HBITMAP old = (HBITMAP)SendMessageW(hwnd, STM_SETIMAGE, IMAGE_BITMAP, 0);
 	if (old != NULL) DeleteObject(old);
+}
+
+typedef struct ui2_win_repeat_binding {
+	HBITMAP bitmap;
+	int pixel_width;
+	int pixel_height;
+	double tile_width;
+	double tile_height;
+	double origin_x;
+	double origin_y;
+} ui2_win_repeat_binding;
+
+static const wchar_t ui2_win_repeat_property_name[] = L"ui2.repeat_pattern";
+
+static inline void ui2_win_clear_repeat_pattern(void *hwnd_ptr) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return;
+	ui2_win_repeat_binding *binding = (ui2_win_repeat_binding *)RemovePropW(
+		hwnd, ui2_win_repeat_property_name);
+	if (binding == NULL) return;
+	if (binding->bitmap != NULL) DeleteObject(binding->bitmap);
+	HeapFree(GetProcessHeap(), 0, binding);
+}
+
+static inline int ui2_win_set_repeat_pattern(void *hwnd_ptr,
+		const unsigned char *pixels, size_t pixel_len, int pixel_width, int pixel_height,
+		double tile_width, double tile_height, double origin_x, double origin_y) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return 0;
+	ui2_win_clear_repeat_pattern(hwnd);
+	if (pixels == NULL || pixel_width <= 0 || pixel_height <= 0 || tile_width <= 0.0
+		|| tile_height <= 0.0 || (size_t)pixel_width > pixel_len / 4u
+		|| (size_t)pixel_height > pixel_len / 4u / (size_t)pixel_width) return 0;
+	HBITMAP bitmap = ui2_win_create_rgba_bitmap(pixels, pixel_width, pixel_height);
+	if (bitmap == NULL) return 0;
+	ui2_win_repeat_binding *binding = (ui2_win_repeat_binding *)HeapAlloc(
+		GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ui2_win_repeat_binding));
+	if (binding == NULL) {
+		DeleteObject(bitmap);
+		return 0;
+	}
+	binding->bitmap = bitmap;
+	binding->pixel_width = pixel_width;
+	binding->pixel_height = pixel_height;
+	binding->tile_width = tile_width;
+	binding->tile_height = tile_height;
+	binding->origin_x = origin_x;
+	binding->origin_y = origin_y;
+	if (!SetPropW(hwnd, ui2_win_repeat_property_name, (HANDLE)binding)) {
+		HeapFree(GetProcessHeap(), 0, binding);
+		DeleteObject(bitmap);
+		return 0;
+	}
+	return 1;
+}
+
+static inline double ui2_win_positive_mod(double value, double extent) {
+	double result = fmod(value, extent);
+	if (result < 0.0) result += extent;
+	return result;
+}
+
+static inline int ui2_win_pattern_is_below(void *pattern_ptr, void *target_ptr) {
+	HWND pattern = (HWND)pattern_ptr;
+	HWND target = (HWND)target_ptr;
+	if (pattern == NULL || target == NULL) return 0;
+	if (pattern == target || GetParent(pattern) == target) return 1;
+	HWND ancestor = GetAncestor(target, GA_PARENT);
+	while (ancestor != NULL) {
+		if (ancestor == pattern) return 1;
+		ancestor = GetParent(ancestor);
+	}
+	HWND root = GetAncestor(pattern, GA_ROOT);
+	HWND pattern_branch = GetParent(root);
+	HWND target_branch = GetParent(GetAncestor(target, GA_ROOT));
+	if (pattern_branch == NULL || target_branch == NULL || pattern_branch != target_branch) return 0;
+	HWND sibling = target_branch;
+	while (sibling != NULL) {
+		sibling = GetWindow(sibling, GW_HWNDPREV);
+		if (sibling == pattern_branch) return 1;
+	}
+	return 0;
+}
+
+static inline int ui2_win_paint_repeat_pattern(void *dc_ptr, void *pattern_ptr,
+		void *target_ptr) {
+	HDC dc = (HDC)dc_ptr;
+	HWND pattern_hwnd = (HWND)pattern_ptr;
+	HWND target_hwnd = (HWND)target_ptr;
+	if (dc == NULL || pattern_hwnd == NULL || target_hwnd == NULL) return 0;
+	ui2_win_repeat_binding *binding = (ui2_win_repeat_binding *)GetPropW(
+		pattern_hwnd, ui2_win_repeat_property_name);
+	if (binding == NULL || binding->bitmap == NULL) return 0;
+	RECT pattern_rect;
+	GetClientRect(pattern_hwnd, &pattern_rect);
+	POINT corners[2] = {{pattern_rect.left, pattern_rect.top},
+		{pattern_rect.right, pattern_rect.bottom}};
+	MapWindowPoints(pattern_hwnd, target_hwnd, corners, 2);
+	int left = corners[0].x;
+	int top = corners[0].y;
+	int right = corners[1].x;
+	int bottom = corners[1].y;
+	if (left >= right || top >= bottom) return 0;
+	HWND root = GetAncestor(pattern_hwnd, GA_ROOT);
+	POINT root_position = {0, 0};
+	MapWindowPoints(pattern_hwnd, root, &root_position, 1);
+	double x_scale = (double)binding->pixel_width / binding->tile_width;
+	double y_scale = (double)binding->pixel_height / binding->tile_height;
+	int source_x = (int)(ui2_win_positive_mod((double)root_position.x -
+		binding->origin_x, binding->tile_width) * x_scale) % binding->pixel_width;
+	int source_y = (int)(ui2_win_positive_mod((double)root_position.y -
+		binding->origin_y, binding->tile_height) * y_scale) % binding->pixel_height;
+	if (fabs(x_scale - 1.0) < 0.000001 && fabs(y_scale - 1.0) < 0.000001) {
+		int pattern_saved = SaveDC(dc);
+		IntersectClipRect(dc, left, top, right, bottom);
+		HBRUSH pattern_brush = CreatePatternBrush(binding->bitmap);
+		POINT previous_origin;
+		SetBrushOrgEx(dc, left - source_x, top - source_y, &previous_origin);
+		HGDIOBJ previous_brush = pattern_brush == NULL ? NULL : SelectObject(dc, pattern_brush);
+		RECT pattern_rect = {left, top, right, bottom};
+		if (previous_brush != NULL) FillRect(dc, &pattern_rect, pattern_brush);
+		if (previous_brush != NULL) SelectObject(dc, previous_brush);
+		SetBrushOrgEx(dc, previous_origin.x, previous_origin.y, NULL);
+		if (pattern_brush != NULL) DeleteObject(pattern_brush);
+		if (pattern_saved != 0) RestoreDC(dc, pattern_saved);
+		return pattern_brush != NULL;
+	}
+	int saved = SaveDC(dc);
+	IntersectClipRect(dc, left, top, right, bottom);
+	HDC source_dc = CreateCompatibleDC(dc);
+	HGDIOBJ old_bitmap = source_dc == NULL ? NULL : SelectObject(source_dc, binding->bitmap);
+	int old_mode = SetStretchBltMode(dc, COLORONCOLOR);
+	int cell_width = (int)ceil(binding->tile_width);
+	int cell_height = (int)ceil(binding->tile_height);
+	if (cell_width < 1) cell_width = 1;
+	if (cell_height < 1) cell_height = 1;
+	for (int y = top; y < bottom; y += cell_height) {
+		int cell_source_y = y == top ? source_y : 0;
+		int destination_height = cell_height;
+		if (y + destination_height > bottom) destination_height = bottom - y;
+		int first_height = destination_height;
+		if (first_height > 0) {
+			int source_height = (int)ceil((double)first_height * y_scale);
+			if (source_height > binding->pixel_height - cell_source_y) {
+				source_height = binding->pixel_height - cell_source_y;
+			}
+			if (source_height < 1) source_height = 1;
+			first_height = (int)ceil((double)source_height / y_scale);
+			if (first_height > destination_height) first_height = destination_height;
+		}
+		int second_height = destination_height - first_height;
+		for (int x = left; x < right; x += cell_width) {
+			int cell_source_x = x == left ? source_x : 0;
+			int destination_width = cell_width;
+			if (x + destination_width > right) destination_width = right - x;
+			int first_width = destination_width;
+			if (first_width > 0) {
+				int source_width = (int)ceil((double)first_width * x_scale);
+				if (source_width > binding->pixel_width - cell_source_x) {
+					source_width = binding->pixel_width - cell_source_x;
+				}
+				if (source_width < 1) source_width = 1;
+				first_width = (int)ceil((double)source_width / x_scale);
+				if (first_width > destination_width) first_width = destination_width;
+			}
+			int second_width = destination_width - first_width;
+			if (source_dc == NULL || old_bitmap == NULL) continue;
+			int first_source_width = (int)ceil((double)first_width * x_scale);
+			int first_source_height = (int)ceil((double)first_height * y_scale);
+			if (first_source_width > binding->pixel_width - cell_source_x) {
+				first_source_width = binding->pixel_width - cell_source_x;
+			}
+			if (first_source_height > binding->pixel_height - cell_source_y) {
+				first_source_height = binding->pixel_height - cell_source_y;
+			}
+			int second_source_width = (int)ceil((double)second_width * x_scale);
+			int second_source_height = (int)ceil((double)second_height * y_scale);
+			if (second_source_width > binding->pixel_width) second_source_width = binding->pixel_width;
+			if (second_source_height > binding->pixel_height) second_source_height = binding->pixel_height;
+			if (first_source_width > 0 && first_source_height > 0) {
+				StretchBlt(dc, x, y, first_width, first_height, source_dc, cell_source_x,
+					cell_source_y, first_source_width, first_source_height, SRCCOPY);
+			}
+			if (second_width > 0 && first_source_height > 0 && second_source_width > 0) {
+				StretchBlt(dc, x + first_width, y, second_width, first_height,
+					source_dc, 0, cell_source_y, second_source_width, first_source_height,
+					SRCCOPY);
+			}
+			if (first_source_width > 0 && second_height > 0 && second_source_height > 0) {
+				StretchBlt(dc, x, y + first_height, first_width, second_height,
+					source_dc, cell_source_x, 0, first_source_width, second_source_height,
+					SRCCOPY);
+			}
+			if (second_width > 0 && second_height > 0 && second_source_width > 0
+				&& second_source_height > 0) {
+				StretchBlt(dc, x + first_width, y + first_height, second_width,
+					second_height, source_dc, 0, 0, second_source_width,
+					second_source_height, SRCCOPY);
+			}
+		}
+	}
+	SetStretchBltMode(dc, old_mode);
+	if (source_dc != NULL) {
+		SelectObject(source_dc, old_bitmap);
+		DeleteDC(source_dc);
+	}
+	if (saved != 0) RestoreDC(dc, saved);
+	return 1;
+}
+
+static inline int ui2_win_clamp_int(int value, int minimum, int maximum) {
+	if (value < minimum) return minimum;
+	if (value > maximum) return maximum;
+	return value;
+}
+
+static inline void ui2_win_source_pixel(const unsigned char *bits, int stride,
+		int top_down, int width, int height, int x, int y, unsigned char *rgba) {
+	x = ui2_win_clamp_int(x, 0, width - 1);
+	y = ui2_win_clamp_int(y, 0, height - 1);
+	int row = top_down ? y : height - 1 - y;
+	const unsigned char *pixel = bits + (size_t)row * (size_t)stride + (size_t)x * 4u;
+	rgba[0] = pixel[2];
+	rgba[1] = pixel[1];
+	rgba[2] = pixel[0];
+	rgba[3] = pixel[3];
+}
+
+static inline void ui2_win_sample_image(const unsigned char *bits, int stride,
+		int top_down, int width, int height, double source_x, double source_y,
+		int nearest, unsigned char *rgba) {
+	if (nearest) {
+		ui2_win_source_pixel(bits, stride, top_down, width, height,
+			(int)floor(source_x + 0.5), (int)floor(source_y + 0.5), rgba);
+		return;
+	}
+	int x0 = (int)floor(source_x);
+	int y0 = (int)floor(source_y);
+	double x_fraction = source_x - floor(source_x);
+	double y_fraction = source_y - floor(source_y);
+	unsigned char c00[4], c10[4], c01[4], c11[4];
+	ui2_win_source_pixel(bits, stride, top_down, width, height, x0, y0, c00);
+	ui2_win_source_pixel(bits, stride, top_down, width, height, x0 + 1, y0, c10);
+	ui2_win_source_pixel(bits, stride, top_down, width, height, x0, y0 + 1, c01);
+	ui2_win_source_pixel(bits, stride, top_down, width, height, x0 + 1, y0 + 1, c11);
+	for (int channel = 0; channel < 4; channel++) {
+		double top = (double)c00[channel] * (1.0 - x_fraction)
+			+ (double)c10[channel] * x_fraction;
+		double bottom = (double)c01[channel] * (1.0 - x_fraction)
+			+ (double)c11[channel] * x_fraction;
+		rgba[channel] = (unsigned char)(top * (1.0 - y_fraction)
+			+ bottom * y_fraction + 0.5);
+	}
+}
+
+static inline int ui2_win_blend_decoded_bitmap(void *dc_ptr, void *bitmap_ptr,
+		int output_width, int output_height, double frame_width, double frame_height,
+		double rotation, int flip_h, int flip_v, int nearest) {
+	HDC dc = (HDC)dc_ptr;
+	HBITMAP bitmap = (HBITMAP)bitmap_ptr;
+	if (dc == NULL || bitmap == NULL || output_width <= 0 || output_height <= 0
+		|| frame_width <= 0.0 || frame_height <= 0.0) return 0;
+	BITMAP source_bitmap;
+	ZeroMemory(&source_bitmap, sizeof(source_bitmap));
+	if (GetObjectW(bitmap, sizeof(source_bitmap), &source_bitmap) == 0
+		|| source_bitmap.bmBits == NULL || source_bitmap.bmBitsPixel != 32) return 0;
+	int source_width = source_bitmap.bmWidth < 0 ? -source_bitmap.bmWidth : source_bitmap.bmWidth;
+	int source_height = source_bitmap.bmHeight < 0 ? -source_bitmap.bmHeight : source_bitmap.bmHeight;
+	int top_down = 1;
+	int stride = source_bitmap.bmWidthBytes;
+	unsigned char *source_bits = (unsigned char *)source_bitmap.bmBits;
+	if (source_width <= 0 || source_height <= 0) return 0;
+	HDC buffer_dc = CreateCompatibleDC(dc);
+	if (buffer_dc == NULL) return 0;
+	BITMAPINFO output_info;
+	ZeroMemory(&output_info, sizeof(output_info));
+	output_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	output_info.bmiHeader.biWidth = output_width;
+	output_info.bmiHeader.biHeight = -output_height;
+	output_info.bmiHeader.biPlanes = 1;
+	output_info.bmiHeader.biBitCount = 32;
+	output_info.bmiHeader.biCompression = BI_RGB;
+	void *output_bits = NULL;
+	HBITMAP output_bitmap = CreateDIBSection(NULL, &output_info, DIB_RGB_COLORS,
+		&output_bits, NULL, 0);
+	if (output_bitmap == NULL) {
+		DeleteDC(buffer_dc);
+		return 0;
+	}
+	HGDIOBJ old_output = SelectObject(buffer_dc, output_bitmap);
+	double normalized = fmod(rotation, 360.0);
+	if (normalized < 0.0) normalized += 360.0;
+	double cosine = 1.0;
+	double sine = 0.0;
+	if (normalized == 90.0 || normalized == 270.0) {
+		cosine = 0.0;
+		sine = 1.0;
+	} else if (normalized == 180.0) {
+		cosine = -1.0;
+	} else if (normalized != 0.0) {
+		double radians = normalized * 3.14159265358979323846 / 180.0;
+		cosine = cos(radians);
+		sine = sin(radians);
+	}
+	double center_x = (double)output_width / 2.0;
+	double center_y = (double)output_height / 2.0;
+	for (int y = 0; y < output_height; y++) {
+		unsigned char *destination = (unsigned char *)output_bits
+			+ (size_t)y * (size_t)output_width * 4u;
+		for (int x = 0; x < output_width; x++) {
+			double screen_x = (double)x + 0.5 - center_x;
+			double screen_y = (double)y + 0.5 - center_y;
+			double local_x = screen_x * cosine + screen_y * sine;
+			double local_y = -screen_x * sine + screen_y * cosine;
+			if (flip_h) local_x = -local_x;
+			if (flip_v) local_y = -local_y;
+			double source_x = (local_x / frame_width + 0.5) * (double)source_width - 0.5;
+			double source_y = (local_y / frame_height + 0.5) * (double)source_height - 0.5;
+			if (source_x < 0.0) source_x = 0.0;
+			if (source_y < 0.0) source_y = 0.0;
+			if (source_x > (double)(source_width - 1)) source_x = (double)(source_width - 1);
+			if (source_y > (double)(source_height - 1)) source_y = (double)(source_height - 1);
+			unsigned char rgba[4];
+			ui2_win_sample_image(source_bits, stride, top_down, source_width,
+				source_height, source_x, source_y, nearest, rgba);
+			size_t offset = (size_t)x * 4u;
+			destination[offset] = rgba[2];
+			destination[offset + 1] = rgba[1];
+			destination[offset + 2] = rgba[0];
+			destination[offset + 3] = rgba[3];
+		}
+	}
+	BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+	int result = AlphaBlend(dc, 0, 0, output_width, output_height, buffer_dc, 0, 0,
+		output_width, output_height, blend);
+	SelectObject(buffer_dc, old_output);
+	DeleteObject(output_bitmap);
+	DeleteDC(buffer_dc);
+	return result;
+}
+
+static inline int ui2_win_paint_decoded_image(void *hwnd_ptr, double frame_width,
+		double frame_height, double rotation, int flip_h, int flip_v, int nearest) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return 1;
+	PAINTSTRUCT paint;
+	HDC dc = BeginPaint(hwnd, &paint);
+	if (dc != NULL) {
+		ui2_win_paint_parent_background(hwnd, dc);
+		RECT rect;
+		GetClientRect(hwnd, &rect);
+		HBITMAP bitmap = (HBITMAP)SendMessageW(hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+		if (bitmap != NULL) {
+			ui2_win_blend_decoded_bitmap(dc, bitmap, rect.right - rect.left,
+				rect.bottom - rect.top, frame_width, frame_height, rotation,
+				flip_h, flip_v, nearest);
+		}
+	}
+	EndPaint(hwnd, &paint);
+	return 1;
+}
+
+static inline void *ui2_win_create_test_dc(int width, int height) {
+	HDC screen = GetDC(NULL);
+	if (screen == NULL || width <= 0 || height <= 0) return NULL;
+	HDC dc = CreateCompatibleDC(screen);
+	ReleaseDC(NULL, screen);
+	if (dc == NULL) return NULL;
+	BITMAPINFO info;
+	ZeroMemory(&info, sizeof(info));
+	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	info.bmiHeader.biWidth = width;
+	info.bmiHeader.biHeight = -height;
+	info.bmiHeader.biPlanes = 1;
+	info.bmiHeader.biBitCount = 32;
+	info.bmiHeader.biCompression = BI_RGB;
+	void *bits = NULL;
+	HBITMAP bitmap = CreateDIBSection(NULL, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+	if (bitmap == NULL) {
+		DeleteDC(dc);
+		return NULL;
+	}
+	SelectObject(dc, bitmap);
+	return dc;
+}
+
+static inline void ui2_win_test_fill(void *dc_ptr, unsigned int color) {
+	HDC dc = (HDC)dc_ptr;
+	if (dc == NULL) return;
+	HBRUSH brush = CreateSolidBrush(ui2_win_color(color));
+	HGDIOBJ previous = SelectObject(dc, brush);
+	PatBlt(dc, 0, 0, INT_MAX, INT_MAX, PATCOPY);
+	SelectObject(dc, previous);
+	DeleteObject(brush);
+}
+
+static inline unsigned int ui2_win_test_pixel(void *dc_ptr, int x, int y) {
+	HDC dc = (HDC)dc_ptr;
+	if (dc == NULL) return 0;
+	COLORREF color = GetPixel(dc, x, y);
+	return ((unsigned int)GetRValue(color) << 16)
+		| ((unsigned int)GetGValue(color) << 8)
+		| (unsigned int)GetBValue(color);
+}
+
+static inline void ui2_win_test_clear(void *dc_ptr) {
+	ui2_win_test_fill(dc_ptr, 0);
+}
+
+static inline void ui2_win_delete_test_dc(void *dc_ptr) {
+	HDC dc = (HDC)dc_ptr;
+	if (dc == NULL) return;
+	HGDIOBJ bitmap = GetCurrentObject(dc, OBJ_BITMAP);
+	HBITMAP placeholder = CreateBitmap(1, 1, 1, 1, NULL);
+	if (placeholder != NULL) SelectObject(dc, placeholder);
+	if (bitmap != NULL) DeleteObject(bitmap);
+	DeleteDC(dc);
+	if (placeholder != NULL) DeleteObject(placeholder);
 }
 
 static inline int ui2_win_set_scroll(void *hwnd_ptr, int content_height, int position) {

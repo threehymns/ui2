@@ -427,7 +427,7 @@ pub fn control_support(kind Kind) BackendSupport {
 		}
 	} $else $if windows {
 		return match kind {
-			.image, .text_area { .partial }
+			.text_area { .partial }
 			else { .supported }
 		}
 	} $else {

@@ -8,6 +8,8 @@ $if !ui2_custom_rendering ? {
 
 #flag windows -lgdi32
 
+#flag windows -lmsimg32
+
 #flag windows -lcomctl32
 
 #flag windows -lshell32
@@ -138,6 +140,22 @@ fn C.ui2_win_invalidate_parent(hwnd voidptr)
 
 fn C.ui2_win_set_bitmap(hwnd voidptr, path &u16, width int, height int) voidptr
 
+fn C.ui2_win_set_decoded_bitmap(hwnd voidptr, pixels voidptr, width int, height int) voidptr
+
+fn C.ui2_win_set_repeat_pattern(hwnd voidptr, pixels voidptr, pixel_len usize, pixel_width int, pixel_height int, tile_width f64, tile_height f64, origin_x f64, origin_y f64) int
+fn C.ui2_win_clear_repeat_pattern(hwnd voidptr)
+fn C.ui2_win_pattern_is_below(pattern voidptr, target voidptr) int
+fn C.ui2_win_paint_repeat_pattern(dc voidptr, pattern voidptr, target voidptr) int
+fn C.ui2_win_paint_decoded_image(hwnd voidptr, frame_width f64, frame_height f64, rotation f64, flip_h int, flip_v int, nearest int) int
+
+fn C.ui2_win_create_rgba_bitmap(pixels voidptr, width int, height int) voidptr
+fn C.ui2_win_blend_decoded_bitmap(dc voidptr, bitmap voidptr, output_width int, output_height int, frame_width f64, frame_height f64, rotation f64, flip_h int, flip_v int, nearest int) int
+fn C.ui2_win_create_test_dc(width int, height int) voidptr
+fn C.ui2_win_test_fill(dc voidptr, color u32)
+fn C.ui2_win_test_pixel(dc voidptr, x int, y int) u32
+fn C.ui2_win_test_clear(dc voidptr)
+fn C.ui2_win_delete_test_dc(dc voidptr)
+
 fn C.ui2_win_clear_bitmap(hwnd voidptr)
 
 fn C.ui2_win_set_scroll(hwnd voidptr, content_height int, position int) int
@@ -197,6 +215,7 @@ const win_wm_mouse_wheel = u32(0x020a)
 const win_wm_dropfiles = u32(0x0233)
 const win_wm_refresh = u32(0x8000 + 77)
 const win_wm_paint_background = u32(0x8000 + 79)
+const win_wm_paint_patterns = u32(0x8000 + 80)
 const win_wm_getminmaxinfo = u32(0x0024)
 
 const win_bn_clicked = 0
@@ -219,6 +238,21 @@ struct WindowsPointerBinding {
 	swipe_left bool
 }
 
+enum WindowsImageMode {
+	none
+	legacy
+	decoded
+	pending
+}
+
+struct WindowsImageOptions {
+	frame     Rect
+	rotation  f64
+	flip_h    bool
+	flip_v    bool
+	pixelated bool
+}
+
 @[heap]
 struct WindowsState {
 mut:
@@ -233,10 +267,16 @@ mut:
 	node_kinds         map[string]Kind
 	node_parents       map[string]string
 	node_frames        map[string]Rect
+	node_native_frames map[string]Rect
 	node_structural    map[string]string
 	node_declared_text map[string]string
 	node_option_sig    map[string]string
 	node_image_path    map[string]string
+	node_image_modes   map[string]WindowsImageMode
+	node_image_options map[string]WindowsImageOptions
+	node_patterns      map[string]int
+	node_pattern_sigs  map[string]string
+	next_pattern_z     int
 	node_ids           map[string]string
 	node_boxes         map[string]BoxStyle
 	node_text_styles   map[string]TextStyle
@@ -283,10 +323,15 @@ const windows_state_singleton = &WindowsState{
 	node_kinds: map[string]Kind{}
 	node_parents: map[string]string{}
 	node_frames: map[string]Rect{}
+	node_native_frames: map[string]Rect{}
 	node_structural: map[string]string{}
 	node_declared_text: map[string]string{}
 	node_option_sig: map[string]string{}
 	node_image_path: map[string]string{}
+	node_image_modes: map[string]WindowsImageMode{}
+	node_image_options: map[string]WindowsImageOptions{}
+	node_patterns: map[string]int{}
+	node_pattern_sigs: map[string]string{}
 	node_ids: map[string]string{}
 	node_boxes: map[string]BoxStyle{}
 	node_text_styles: map[string]TextStyle{}
@@ -329,6 +374,59 @@ fn windows_handle_id(hwnd voidptr) u64 {
 
 fn windows_bool(value bool) int {
 	return if value { 1 } else { 0 }
+}
+
+fn windows_image_mode(el Element) WindowsImageMode {
+	if el.kind != .image {
+		return .none
+	}
+	if el.image_resource.id.len > 0 {
+		return if el.image_resource.renderer_ready() { .decoded } else { .pending }
+	}
+	if el.image_path.trim_space().len > 0 {
+		return .legacy
+	}
+	return .none
+}
+
+fn windows_image_resource_signature(el Element) string {
+	match windows_image_mode(el) {
+		.decoded {
+			resource := el.image_resource
+			return '${resource.id}:${int(resource.state)}:${int(resource.opacity)}:${resource.width()}:${resource.height()}:rgba'
+		}
+		.pending {
+			resource := el.image_resource
+			return '${resource.id}:${int(resource.state)}:${int(resource.opacity)}:pending'
+		}
+		.legacy {
+			return 'legacy:${int(el.frame.width)}:${int(el.frame.height)}:${el.image_path.bytes().hex()}'
+		}
+		.none {
+			return 'none'
+		}
+	}
+}
+
+fn windows_pattern_signature(pattern RepeatPattern) string {
+	return '${repeat_pattern_cache_key(pattern)}:${pattern.origin_x}:${pattern.origin_y}'
+}
+
+fn windows_image_options(el Element) WindowsImageOptions {
+	return WindowsImageOptions{
+		frame:     el.frame
+		rotation:  el.rotation
+		flip_h:    el.flip_h
+		flip_v:    el.flip_v
+		pixelated: el.pixelated
+	}
+}
+
+fn windows_native_frame(el Element) Rect {
+	if el.kind == .image {
+		return transformed_image_bounds(el.frame, el.rotation)
+	}
+	return el.frame
 }
 
 fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
@@ -510,6 +608,7 @@ pub fn refresh() {
 	st.toggle_allow_no_selection = map[u64]bool{}
 	st.toggle_ids = map[u64]string{}
 	st.toggle_views = map[u64]voidptr{}
+	st.next_pattern_z = 0
 	mut active := map[string]bool{}
 	if root.kind == .screen {
 		st.node_boxes[''] = root.box
@@ -1056,7 +1155,10 @@ fn windows_options_signature(entries []MenuEntry) string {
 
 fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, created bool) {
 	mut st := windows_state()
-	C.ui2_win_set_widget_frame(hwnd, windows_widget_kind(el.kind), int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), int(el.frame.height))
+	native_frame := windows_native_frame(el)
+	C.ui2_win_set_widget_frame(hwnd, windows_widget_kind(el.kind), int(native_frame.x),
+		int(native_frame.y) + y_offset, int(native_frame.width), int(native_frame.height))
+	st.node_native_frames[key] = native_frame
 	C.ui2_win_show(hwnd, windows_bool(!el.hidden))
 	C.ui2_win_enable(hwnd, windows_bool(el.enabled))
 	declared_changed := (st.node_declared_text[key] or { '' }) != el.text
@@ -1100,20 +1202,33 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 			unsafe { free(wide_placeholder) }
 		}
 		.image {
-			image_source := image_path_for_element(el)
-			image_sig := '${el.image_resource.id}:${int(el.image_resource.state)}:${image_source.bytes().hex()}:${int(el.frame.width)}:${int(el.frame.height)}'
+			mode := windows_image_mode(el)
+			st.node_image_modes[key] = mode
+			st.node_image_options[key] = windows_image_options(el)
+			image_sig := windows_image_resource_signature(el)
 			if created || (st.node_image_path[key] or { '' }) != image_sig {
-				wide_path := image_source.to_wide()
-				bitmap := C.ui2_win_set_bitmap(hwnd, wide_path, int(el.frame.width), int(el.frame.height))
-				if bitmap == unsafe { nil } && image_source.len > 0 {
-					eprintln('ui2: Windows native images currently require a BMP file: ${image_source}')
+				mut bitmap := voidptr(unsafe { nil })
+				match mode {
+					.decoded {
+						pixels := el.image_resource.decoded_pixels()
+						bitmap = C.ui2_win_set_decoded_bitmap(hwnd, voidptr(pixels.data),
+							el.image_resource.width(), el.image_resource.height())
+					}
+					.legacy {
+						wide_path := el.image_path.to_wide()
+						bitmap = C.ui2_win_set_bitmap(hwnd, wide_path, int(el.frame.width),
+							int(el.frame.height))
+						unsafe { free(wide_path) }
+					}
+					else {
+						C.ui2_win_clear_bitmap(hwnd)
+					}
 				}
 				if bitmap == unsafe { nil } {
 					st.images.delete(key)
 				} else {
 					st.images[key] = bitmap
 				}
-				unsafe { free(wide_path) }
 				st.node_image_path[key] = image_sig
 			}
 		}
@@ -1121,7 +1236,30 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 			C.ui2_win_slider_set_normalized(hwnd, slider_value_normalized(el.value,
 				el.min_value, el.max_value), windows_bool(el.orientation == .vertical))
 		}
-		.view, .scroll, .screen {}
+		.view, .scroll {
+			pattern := el.background.pattern
+			pattern_sig := if pattern.valid() { windows_pattern_signature(pattern) } else { '' }
+			if pattern_sig.len > 0 {
+				st.node_patterns[key] = st.next_pattern_z
+				st.next_pattern_z++
+			} else {
+				st.node_patterns.delete(key)
+			}
+			if created || (st.node_pattern_sigs[key] or { '' }) != pattern_sig {
+				if pattern_sig.len > 0 {
+					pixels := pattern.pixels
+					if C.ui2_win_set_repeat_pattern(hwnd, voidptr(pixels.data), pixels.len,
+						pattern.pixel_width, pattern.pixel_height, pattern.tile_width,
+						pattern.tile_height, pattern.origin_x, pattern.origin_y) == 0 {
+						st.node_patterns.delete(key)
+					}
+				} else {
+					C.ui2_win_clear_repeat_pattern(hwnd)
+				}
+				st.node_pattern_sigs[key] = pattern_sig
+			}
+		}
+		.screen {}
 	}
 	st.node_declared_text[key] = el.text
 	windows_update_style(key, text_hwnd, el)
@@ -1312,6 +1450,7 @@ fn windows_reparent_direct_children(key string, new_parent voidptr) {
 
 fn windows_cleanup_node_resources(key string, hwnd voidptr, kind Kind) {
 	mut st := windows_state()
+	C.ui2_win_clear_repeat_pattern(hwnd)
 	if kind == .image {
 		bitmap := st.images[key] or { voidptr(unsafe { nil }) }
 		if hwnd != unsafe { nil } && C.ui2_win_is_window(hwnd) != 0 {
@@ -1329,6 +1468,10 @@ fn windows_cleanup_node_resources(key string, hwnd voidptr, kind Kind) {
 	if brush != unsafe { nil } {
 		C.ui2_win_delete_object(brush)
 	}
+	st.node_image_modes.delete(key)
+	st.node_image_options.delete(key)
+	st.node_patterns.delete(key)
+	st.node_pattern_sigs.delete(key)
 	st.fonts.delete(key)
 	st.font_sigs.delete(key)
 	st.brushes.delete(key)
@@ -1370,6 +1513,7 @@ fn windows_remove_stale(active map[string]bool) {
 		st.node_kinds.delete(key)
 		st.node_parents.delete(key)
 		st.node_frames.delete(key)
+		st.node_native_frames.delete(key)
 		st.node_structural.delete(key)
 		st.node_declared_text.delete(key)
 		st.node_option_sig.delete(key)
@@ -1386,6 +1530,10 @@ fn windows_dispose_all() {
 	mut st := windows_state()
 	windows_release_all_node_resources()
 	st.nodes = map[string]voidptr{}
+	st.node_image_modes = map[string]WindowsImageMode{}
+	st.node_image_options = map[string]WindowsImageOptions{}
+	st.node_patterns = map[string]int{}
+	st.node_pattern_sigs = map[string]string{}
 	st.root = unsafe { nil }
 }
 
@@ -1403,7 +1551,7 @@ fn windows_reposition_scroll_children(scroll_key string, position int) {
 			continue
 		}
 		hwnd := st.nodes[child_key] or { continue }
-		frame := st.node_frames[child_key] or { continue }
+		frame := st.node_native_frames[child_key] or { continue }
 		kind := st.node_kinds[child_key] or { Kind.view }
 		C.ui2_win_set_widget_frame(hwnd, windows_widget_kind(kind), int(frame.x), int(frame.y) - position, int(frame.width), int(frame.height))
 	}
@@ -1619,6 +1767,21 @@ fn windows_handle_drop(drop voidptr) {
 	})
 }
 
+fn windows_paint_patterns(hwnd voidptr, dc voidptr) {
+	st := windows_state()
+	for order in 0 .. st.next_pattern_z {
+		for key, pattern_order in st.node_patterns {
+			if pattern_order != order {
+				continue
+			}
+			pattern_hwnd := st.nodes[key] or { continue }
+			if C.ui2_win_pattern_is_below(pattern_hwnd, hwnd) != 0 {
+				C.ui2_win_paint_repeat_pattern(dc, pattern_hwnd, hwnd)
+			}
+		}
+	}
+}
+
 @[export: 'ui2_windows_window_proc']
 fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize) isize {
 	mut st := windows_state()
@@ -1669,6 +1832,10 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 			brush := st.brushes[key] or { voidptr(unsafe { nil }) }
 			return C.ui2_win_apply_control_colors(voidptr(wparam), style.color, box.bg,
 				windows_bool(windows_draws_no_background(kind, box)), brush)
+		}
+		win_wm_paint_patterns {
+			windows_paint_patterns(hwnd, voidptr(wparam))
+			return 0
 		}
 		win_wm_paint_background {
 			mut box := BoxStyle{}
@@ -1803,6 +1970,20 @@ fn ui2_windows_control_border(hwnd voidptr) {
 	box := st.node_boxes[key] or { return }
 	C.ui2_win_paint_control_border(hwnd, box.border_color, box.radius, box.border_left,
 		box.border_top, box.border_right, box.border_bottom)
+}
+
+@[export: 'ui2_windows_paint_image']
+fn ui2_windows_paint_image(hwnd voidptr) int {
+	st := windows_state()
+	key := st.handle_keys[windows_handle_id(hwnd)] or { return 0 }
+	mode := st.node_image_modes[key] or { return 0 }
+	if mode !in [WindowsImageMode.decoded, .pending] {
+		return 0
+	}
+	options := st.node_image_options[key] or { return 0 }
+	return C.ui2_win_paint_decoded_image(hwnd, options.frame.width, options.frame.height,
+		options.rotation, windows_bool(options.flip_h), windows_bool(options.flip_v),
+		windows_bool(options.pixelated))
 }
 
 @[export: 'ui2_windows_paint_transparent_button']
