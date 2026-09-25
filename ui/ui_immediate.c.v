@@ -663,6 +663,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		check_long_press()
 		ctx.end()
+		trace_frame_complete()
 		if !g_first_frame_complete {
 			g_first_frame_complete = true
 		}

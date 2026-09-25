@@ -15,8 +15,10 @@ pub enum StartupPhase {
 }
 
 pub type StartupPhaseHandler = fn (StartupPhase, u64)
+pub type FrameCompleteHandler = fn ()
 
 __global g_startup_phase_handler = StartupPhaseHandler(unsafe { nil })
+__global g_frame_complete_handler = FrameCompleteHandler(unsafe { nil })
 
 pub fn set_startup_phase_handler(handler StartupPhaseHandler) {
 	g_startup_phase_handler = handler
@@ -24,6 +26,21 @@ pub fn set_startup_phase_handler(handler StartupPhaseHandler) {
 
 pub fn clear_startup_phase_handler() {
 	g_startup_phase_handler = StartupPhaseHandler(unsafe { nil })
+}
+
+pub fn set_frame_complete_handler(handler FrameCompleteHandler) {
+	g_frame_complete_handler = handler
+}
+
+pub fn clear_frame_complete_handler() {
+	g_frame_complete_handler = FrameCompleteHandler(unsafe { nil })
+}
+
+pub fn trace_frame_complete() {
+	if voidptr(g_frame_complete_handler) == unsafe { nil } {
+		return
+	}
+	g_frame_complete_handler()
 }
 
 pub fn trace_startup_phase(phase StartupPhase) {
