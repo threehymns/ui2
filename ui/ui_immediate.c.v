@@ -153,6 +153,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_shared_samplers_init = false
 	__global g_shared_sampler_linear = gfx.Sampler{}
 	__global g_shared_sampler_nearest = gfx.Sampler{}
+	__global g_repeat_pattern_ids = map[string]int{}
+	__global g_repeat_pattern_pixels = map[string][]u8{}
+	__global g_shared_repeat_sampler_init = false
+	__global g_shared_repeat_sampler = gfx.Sampler{}
 
 	// Map values are copied byte-for-byte when an existing key is replaced.
 	// Unlike keys, their nested strings are not released by map.set. The text
@@ -1702,6 +1706,9 @@ fn page_focused_text_area(direction int) {
 			.view {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
+				if el.background.pattern.valid() {
+					draw_repeat_pattern(ctx, el, x, y, off_x, off_y, clip)
+				}
 				if !el.box.transparent {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, el.box.bg, el.box.radius)
 				}
@@ -2261,6 +2268,56 @@ fn page_focused_text_area(direction int) {
 		return if nearest { g_shared_sampler_nearest } else { g_shared_sampler_linear }
 	}
 
+	fn shared_repeat_sampler() gfx.Sampler {
+		if !g_shared_repeat_sampler_init {
+			mut desc := gfx.SamplerDesc{
+				min_filter:    .nearest
+				mag_filter:    .nearest
+				mipmap_filter: .nearest
+				wrap_u:        .repeat
+				wrap_v:        .repeat
+			}
+			g_shared_repeat_sampler = gfx.make_sampler(&desc)
+			g_shared_repeat_sampler_init = true
+		}
+		return g_shared_repeat_sampler
+	}
+
+	fn draw_repeat_pattern(ctx &gg.Context, el Element, x f64, y f64, off_x f64, off_y f64, clip Rect) {
+		pattern := el.background.pattern
+		if !cache_repeat_pattern(pattern) {
+			return
+		}
+		image_id := g_repeat_pattern_ids[repeat_pattern_cache_key(pattern)] or { return }
+		mut pattern_clip := el.background.clip
+		if pattern_clip.width <= 0 || pattern_clip.height <= 0 {
+			pattern_clip = el.frame
+		}
+		visible := intersect_rect(rect(off_x + pattern_clip.x, off_y + pattern_clip.y,
+			pattern_clip.width, pattern_clip.height), clip)
+		if visible.width <= 0 || visible.height <= 0 {
+			return
+		}
+		source := pattern.source_rect(el.frame)
+		apply_clip(ctx, visible)
+		ctx.draw_image_with_config(
+			img_id: image_id
+			img_rect: gg.Rect{
+				x: f32(x)
+				y: f32(y)
+				width: f32(el.frame.width)
+				height: f32(el.frame.height)
+			}
+			part_rect: gg.Rect{
+				x: f32(source.x)
+				y: f32(source.y)
+				width: f32(source.width)
+				height: f32(source.height)
+			}
+		)
+		apply_clip(ctx, clip)
+	}
+
 	// image_texture_flips maps screen-space mirroring to the texture-space
 	// flip flags gg applies. Rotation swaps the local axes, so at 90/270
 	// degrees a horizontal screen mirror samples the texture vertically and
@@ -2498,6 +2555,9 @@ fn page_focused_text_area(direction int) {
 		if el.hidden {
 			return
 		}
+		if el.background.pattern.valid() {
+			cache_repeat_pattern(el.background.pattern)
+		}
 		if el.kind == .image {
 			if el.image_resource.id.len > 0 {
 				cache_image_resource(el.image_resource)
@@ -2570,6 +2630,35 @@ fn page_focused_text_area(direction int) {
 		image_id := g_gg_app.ctx.cache_image(resource_image)
 		g_image_resource_ids[resource.id] = image_id
 		return image_id >= 0
+	}
+
+	fn cache_repeat_pattern(pattern RepeatPattern) bool {
+		if !pattern.valid() || g_gg_app.ctx == unsafe { nil } {
+			return false
+		}
+		key := repeat_pattern_cache_key(pattern)
+		if key in g_repeat_pattern_ids {
+			return true
+		}
+		mut pixels := pattern.pixels.clone()
+		mut tile := gg.Image{
+			width:       pattern.pixel_width
+			height:      pattern.pixel_height
+			nr_channels: 4
+			data:        pixels.data
+			path:        key
+			nr_mipmaps:  1
+		}
+		tile.init_sokol_image()
+		if !tile.ok {
+			return false
+		}
+		image_id := g_gg_app.ctx.cache_image(tile)
+		mut cached := g_gg_app.ctx.get_cached_image_by_idx(image_id)
+		cached.ssmp = shared_repeat_sampler()
+		g_repeat_pattern_pixels[key] = pixels
+		g_repeat_pattern_ids[key] = image_id
+		return true
 	}
 
 	// ── Drawing helpers ────────────────────────────────────────────────
