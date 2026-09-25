@@ -393,8 +393,7 @@ fn test_macos_pattern_phase_clip_and_resize_reuse_native_tile() {
 	}
 	pattern := macos_test_pattern()
 	first := pattern_background('pattern', pattern, rect(100, 50, 64, 48))
-	view := native_new_pattern_view(native_rect(100, 50, 64, 48), first.box)
-	native_update_pattern(view, first)
+	view := native_create_element(first)
 	mut st := state()
 	key := u64(voidptr(view))
 	first_image := st.pattern_images[key] or { unsafe { nil } }

@@ -1079,6 +1079,9 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.node_tooltips.delete(key)
 		create_started := if st.refresh_debug.active { time.sys_mono_now() } else { u64(0) }
 		native = native_create_element(create_el)
+		if pattern_mode {
+			native_update_pattern(native, create_el)
+		}
 		if st.refresh_debug.active {
 			st.refresh_debug.nodes_created++
 			st.refresh_debug.native_create_ns += time.sys_mono_now() - create_started
@@ -2166,9 +2169,8 @@ fn ui2_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
 	C.CGContextClipToRect(context, macos.rect(clip.x, clip.y, clip.width, clip.height))
 	C.CGContextSetInterpolationQuality(context, 0)
 	if f64(pattern.pixel_w) == pattern.tile_w && f64(pattern.pixel_h) == pattern.tile_h {
-		C.CGContextTranslateCTM(context, pattern.phase_x, pattern.phase_y)
-		C.CGContextDrawTiledImage(context, macos.rect(-pattern.phase_x, -pattern.phase_y,
-			bounds.width + pattern.phase_x, bounds.height + pattern.phase_y), image)
+		C.CGContextDrawTiledImage(context, macos.rect(pattern.phase_x - pattern.tile_w,
+			pattern.phase_y - pattern.tile_h, pattern.tile_w, pattern.tile_h), image)
 	} else {
 		native_draw_pattern_tiles(context, image, pattern, clip)
 	}

@@ -97,8 +97,7 @@ $if ios ? {
 		}
 		pattern := uikit_test_pattern()
 		first := pattern_background('pattern', pattern, rect(100, 50, 64, 48))
-		view := new_pattern_view(first.frame, first.box)
-		native_update_pattern(view, first)
+		view := native_create_element(first)
 		key := u64(view)
 		first_image := g_pattern_images[key] or { unsafe { nil } }
 		first_state := g_pattern_states[key] or { NativePatternState{} }

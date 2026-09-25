@@ -932,9 +932,8 @@ fn vui_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
 	C.CGContextClipToRect(context, macos.rect(clip.x, clip.y, clip.width, clip.height))
 	C.CGContextSetInterpolationQuality(context, 0)
 	if f64(pattern.pixel_w) == pattern.tile_w && f64(pattern.pixel_h) == pattern.tile_h {
-		C.CGContextTranslateCTM(context, pattern.phase_x, pattern.phase_y)
-		C.CGContextDrawTiledImage(context, macos.rect(-pattern.phase_x, -pattern.phase_y,
-			bounds.width + pattern.phase_x, bounds.height + pattern.phase_y), image)
+		C.CGContextDrawTiledImage(context, macos.rect(pattern.phase_x - pattern.tile_w,
+			pattern.phase_y - pattern.tile_h, pattern.tile_w, pattern.tile_h), image)
 	} else {
 		native_draw_pattern_tiles(context, image, pattern, clip)
 	}
@@ -1523,6 +1522,9 @@ fn render_element(parent View, el Element, key string, mut active map[string]boo
 		can_reparent := old_native != unsafe { nil } && existing_kind in [.view, .scroll]
 			&& el.kind in [.view, .scroll]
 		native = native_create_element(el)
+		if pattern_mode {
+			native_update_pattern(native, el)
+		}
 		g_nodes[key] = native
 		g_node_kinds[key] = el.kind
 		g_node_gestures[key] = new_gestures
