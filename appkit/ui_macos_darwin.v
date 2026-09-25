@@ -11,6 +11,36 @@ import os
 import time
 
 #flag darwin -framework Cocoa
+#flag darwin -framework CoreGraphics
+
+fn C.CGContextSaveGState(voidptr)
+
+fn C.CGContextRestoreGState(voidptr)
+
+fn C.CGContextClipToRect(voidptr, macos.Rect)
+
+fn C.CGContextTranslateCTM(voidptr, f64, f64)
+
+fn C.CGContextDrawTiledImage(voidptr, macos.Rect, voidptr)
+
+fn C.CGContextDrawImage(voidptr, macos.Rect, voidptr)
+
+fn C.CGContextSetInterpolationQuality(voidptr, int)
+
+fn C.CGColorSpaceCreateDeviceRGB() voidptr
+
+fn C.CGColorSpaceRelease(voidptr)
+
+fn C.CGBitmapContextCreate(voidptr, usize, usize, usize, usize, voidptr, u32, voidptr,
+	voidptr, voidptr) voidptr
+
+fn C.CGBitmapContextGetData(voidptr) voidptr
+
+fn C.CGBitmapContextCreateImage(voidptr) voidptr
+
+fn C.CGContextRelease(voidptr)
+
+fn C.CGImageRelease(voidptr)
 
 #flag darwin -framework QuartzCore
 
@@ -31,6 +61,26 @@ struct NativeRect {
 	y      f64
 	width  f64
 	height f64
+}
+
+struct NativeImageState {
+	resource_id string
+	path        string
+	image       NativeView
+}
+
+struct NativePatternState {
+	key       string
+	image     voidptr
+	pixel_w   int
+	pixel_h   int
+	tile_w    f64
+	tile_h    f64
+	frame_x   f64
+	frame_y   f64
+	phase_x   f64
+	phase_y   f64
+	clip      Rect
 }
 
 struct RunConfig {
@@ -86,6 +136,10 @@ mut:
 	node_tooltips       map[string]string
 	node_menu_sig       map[string]string
 	node_menu_items     map[string][]u64
+	node_pattern        map[string]bool
+	image_states        map[u64]NativeImageState
+	pattern_images      map[u64]voidptr
+	pattern_states      map[u64]NativePatternState
 	textview_ids        map[u64]string // NSTextView pointer -> lookup id (no tag on NSView)
 	textview_action_ids map[u64]string // NSTextView pointer -> change event id
 	scroll_ids          map[u64]string // NSClipView pointer -> Scroll element id
@@ -125,6 +179,10 @@ const runtime_state_singleton = &RuntimeState{
 	node_tooltips: map[string]string{}
 	node_menu_sig: map[string]string{}
 	node_menu_items: map[string][]u64{}
+	node_pattern: map[string]bool{}
+	image_states: map[u64]NativeImageState{}
+	pattern_images: map[u64]voidptr{}
+	pattern_states: map[u64]NativePatternState{}
 	textview_ids: map[u64]string{}
 	textview_action_ids: map[u64]string{}
 	scroll_ids: map[u64]string{}
@@ -145,6 +203,33 @@ const runtime_state_singleton = &RuntimeState{
 
 fn state() &RuntimeState {
 	return unsafe { runtime_state_singleton }
+}
+
+fn native_cgimage_from_rgba(width int, height int, pixels []u8) voidptr {
+	if width <= 0 || height <= 0 || pixels.len < width * height * 4 {
+		return unsafe { nil }
+	}
+	space := C.CGColorSpaceCreateDeviceRGB()
+	if space == unsafe { nil } {
+		return unsafe { nil }
+	}
+	context := C.CGBitmapContextCreate(unsafe { nil }, usize(width), usize(height), 8,
+		usize(width * 4), space, u32(16387), unsafe { nil }, unsafe { nil }, unsafe { nil })
+	C.CGColorSpaceRelease(space)
+	if context == unsafe { nil } {
+		return unsafe { nil }
+	}
+	data := C.CGBitmapContextGetData(context)
+	if data == unsafe { nil } {
+		C.CGContextRelease(context)
+		return unsafe { nil }
+	}
+	unsafe {
+		vmemcpy(data, pixels.data, pixels.len)
+	}
+	image := C.CGBitmapContextCreateImage(context)
+	C.CGContextRelease(context)
+	return image
 }
 
 pub fn bounds() Rect {
@@ -833,6 +918,11 @@ fn ensure_runtime_classes() {
 		macos.add_method(cls, 'resetCursorRects', voidptr(ui2_pointer_reset_cursor_rects), 'v@:')
 		macos.register_class_pair(cls)
 	}
+	if macos.get_class('UI2PatternView') == unsafe { nil } {
+		cls := macos.allocate_class_pair(macos.get_class('UI2FlippedView'), 'UI2PatternView')
+		macos.add_method(cls, 'drawRect:', voidptr(ui2_pattern_draw_rect), 'v@:@')
+		macos.register_class_pair(cls)
+	}
 	if macos.get_class('UI2AppDelegate') == unsafe { nil } {
 		cls := macos.allocate_class_pair(macos.get_class('NSObject'), 'UI2AppDelegate')
 		macos.add_method(cls, 'applicationDidFinishLaunching:', voidptr(ui2_app_did_finish_launching), 'v@:@')
@@ -932,6 +1022,8 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 	existing_direct := st.node_text_direct[key] or { false }
 	existing_interactive := st.node_interactive[key] or { false }
 	existing_secure := st.node_secure[key] or { false }
+	pattern_mode := el.kind == .view && el.background.pattern.valid()
+	pattern_changed := el.kind == .view && (st.node_pattern[key] or { false }) != pattern_mode
 	interactive := element_interactive(el)
 	text_area_mode_changed := el.kind == .text_area && existing_kind == .text_area
 		&& existing_direct != el.disable_scroll
@@ -945,7 +1037,7 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 	content_sig := text_area_content_signature(el)
 	content_changed := key !in st.node_content_sig || (st.node_content_sig[key] or { '' }) != content_sig
 	if native_is_nil(native) || existing_kind != el.kind || text_area_mode_changed
-		|| interactive_changed || secure_changed || label_boxed_changed {
+		|| interactive_changed || secure_changed || label_boxed_changed || pattern_changed {
 		old_native := native
 		mut create_el := el
 		mut restore_editing := false
@@ -986,6 +1078,9 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.node_tooltips.delete(key)
 		create_started := if st.refresh_debug.active { time.sys_mono_now() } else { u64(0) }
 		native = native_create_element(create_el)
+		if pattern_mode {
+			native_update_pattern(native, create_el)
+		}
 		if st.refresh_debug.active {
 			st.refresh_debug.nodes_created++
 			st.refresh_debug.native_create_ns += time.sys_mono_now() - create_started
@@ -995,6 +1090,7 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.node_interactive[key] = interactive
 		st.node_label_boxed[key] = label_needs_container(el)
 		st.node_secure[key] = el.secure
+		st.node_pattern[key] = pattern_mode
 		if el.kind == .text_area {
 			st.node_text_direct[key] = el.disable_scroll
 		} else {
@@ -1235,7 +1331,11 @@ fn native_create_element(el Element) NativeView {
 			native_nil_view()
 		}
 		.view {
-			native_new_view(element_rect(el.frame), el.box, element_interactive(el))
+			if el.background.pattern.valid() {
+				native_new_pattern_view(element_rect(el.frame), el.box)
+			} else {
+				native_new_view(element_rect(el.frame), el.box, element_interactive(el))
+			}
 		}
 		.scroll {
 			native_new_scroll(element_rect(el.frame), el.box, el.persistent_scrollbars)
@@ -1244,7 +1344,7 @@ fn native_create_element(el Element) NativeView {
 			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
-			native_new_image(element_rect(el.frame), el.image_path, el.rotation)
+			native_new_image_element(el)
 		}
 		.button {
 			native_new_button(element_rect(el.frame), el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, el.text_style.lines, el.image_path, el.native_style)
@@ -1280,6 +1380,11 @@ fn native_update_element(native NativeView, el Element, declared_text_changed bo
 			native_set_frame(native, element_rect(el.frame))
 			native_set_box_background(native, el.box)
 			native_set_corner_radius(native, el.box.radius)
+			if el.background.pattern.valid() {
+				native_update_pattern(native, el)
+			} else {
+				native_clear_pattern(native)
+			}
 		}
 		.scroll {
 			native_set_frame(native, element_rect(el.frame))
@@ -1290,7 +1395,7 @@ fn native_update_element(native NativeView, el Element, declared_text_changed bo
 			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
-			native_update_image(native, element_rect(el.frame), el.image_path, el.rotation)
+			native_update_image_element(native, el)
 		}
 		.button {
 			native_update_button(native, element_rect(el.frame), el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, el.text_style.lines, el.image_path, el.native_style)
@@ -1450,6 +1555,17 @@ fn register_control(native NativeView, id string, submit_id string, emit_change 
 fn unregister_node(key string, native NativeView, kind Kind, text_direct bool) {
 	mut st := state()
 	pointer := u64(voidptr(native))
+	if kind == .image {
+		if previous := st.image_states[pointer] {
+			if !native_is_nil(previous.image) {
+				macos.release(previous.image)
+			}
+			st.image_states.delete(pointer)
+		}
+	}
+	if kind == .view {
+		native_clear_pattern(native)
+	}
 	st.pointer_ids.delete(pointer)
 	st.pointer_draggable.delete(pointer)
 	st.cursor_ids.delete(pointer)
@@ -1519,6 +1635,7 @@ fn forget_descendant_nodes(key string) {
 		st.node_secure.delete(child_key_)
 		st.node_declared_text.delete(child_key_)
 		st.node_content_sig.delete(child_key_)
+		st.node_pattern.delete(child_key_)
 		st.node_tooltips.delete(child_key_)
 	}
 }
@@ -1578,6 +1695,7 @@ fn remove_stale_nodes(active map[string]bool) {
 		st.node_secure.delete(key)
 		st.node_declared_text.delete(key)
 		st.node_content_sig.delete(key)
+		st.node_pattern.delete(key)
 		st.node_tooltips.delete(key)
 	}
 }
@@ -1637,6 +1755,7 @@ fn remove_stale_nodes_below(root_key string, active map[string]bool) {
 		st.node_secure.delete(key)
 		st.node_declared_text.delete(key)
 		st.node_content_sig.delete(key)
+		st.node_pattern.delete(key)
 		st.node_tooltips.delete(key)
 	}
 }
@@ -1815,30 +1934,243 @@ fn native_set_scroll_background(scroll NativeView, box BoxStyle) {
 	}
 }
 
+fn native_new_pattern_view(frame NativeRect, box BoxStyle) NativeView {
+	ensure_runtime_classes()
+	native := macos.msg_id_rect(macos.alloc('UI2PatternView'), 'initWithFrame:', appkit_rect(frame))
+	native_set_box_background(native, box)
+	native_set_corner_radius(native, box.radius)
+	return native
+}
+
+fn native_new_image_element(el Element) NativeView {
+	image_view := macos.msg_id_rect(macos.alloc('UI2PointerImageView'), 'initWithFrame:', appkit_rect(element_rect(el.frame)))
+	native_update_image_element(image_view, el)
+	return image_view
+}
+
 fn native_new_image(frame NativeRect, path string, rotation f64) NativeView {
 	image_view := macos.msg_id_rect(macos.alloc('UI2PointerImageView'), 'initWithFrame:', appkit_rect(frame))
 	native_update_image(image_view, frame, path, rotation)
 	return image_view
 }
 
+fn native_update_image_element(image_view NativeView, el Element) {
+	native_set_image_transform(image_view, element_rect(el.frame), el.rotation, el.flip_h, el.flip_v)
+	native_set_image_filter(image_view, el.pixelated)
+	mut st := state()
+	key := u64(voidptr(image_view))
+	current := st.image_states[key] or { NativeImageState{} }
+	resource := el.image_resource
+	if resource.id.len > 0 {
+		if resource.state == .ready && (current.resource_id != resource.id || native_is_nil(current.image)) {
+			image := native_image_from_resource(resource)
+			if !native_is_nil(image) {
+				native_install_image(image_view, key, resource.id, '', image)
+			}
+		}
+		return
+	}
+	path := el.image_path
+	if path != current.path || current.resource_id.len > 0 || (path.len > 0 && native_is_nil(current.image)) {
+		image := native_image_from_path(path)
+		if path.len == 0 || !native_is_nil(image) {
+			native_install_image(image_view, key, '', path, image)
+		}
+	}
+}
+
 fn native_update_image(image_view NativeView, frame NativeRect, path string, rotation f64) {
-	rotated := rotation < -0.001 || rotation > 0.001
+	native_set_image_transform(image_view, frame, rotation, false, false)
+	native_set_image_filter(image_view, false)
+	mut st := state()
+	key := u64(voidptr(image_view))
+	current := st.image_states[key] or { NativeImageState{} }
+	if path == current.path && current.resource_id.len == 0 && (path.len == 0 || !native_is_nil(current.image)) {
+		return
+	}
+	image := native_image_from_path(path)
+	if path.len == 0 || !native_is_nil(image) {
+		native_install_image(image_view, key, '', path, image)
+	}
+}
+
+fn native_set_image_transform(image_view NativeView, frame NativeRect, rotation f64, flip_h bool, flip_v bool) {
 	native_view_reset_transform(image_view)
 	native_set_frame(image_view, frame)
 	macos.msg_void_i64(image_view, 'setImageScaling:', 3)
-	if rotated {
+	flip_x, flip_y := image_texture_flips(rotation, flip_h, flip_v)
+	native_set_layer_scale(image_view, if flip_x { -1.0 } else { 1.0 }, if flip_y { -1.0 } else { 1.0 })
+	if rotation < -0.001 || rotation > 0.001 {
 		native_view_set_rotation(image_view, rotation)
 	} else {
 		native_view_clear_rotation(image_view)
 	}
-	if path.trim_space() == '' {
-		macos.msg_void1(image_view, 'setImage:', macos.Id(unsafe { nil }))
+}
+
+fn native_set_layer_scale(view NativeView, x f64, y f64) {
+	layer := macos.msg_id(view, 'layer')
+	if native_is_nil(layer) {
 		return
 	}
-	img := macos.msg_id1(macos.alloc('NSImage'), 'initWithContentsOfFile:', macos.nsstring(path))
-	macos.msg_void1(image_view, 'setImage:', img)
-	if !native_is_nil(img) {
-		macos.release(img)
+	macos.msg_void2(layer, 'setValue:forKeyPath:', objc_number_f64(x), macos.nsstring('transform.scale.x'))
+	macos.msg_void2(layer, 'setValue:forKeyPath:', objc_number_f64(y), macos.nsstring('transform.scale.y'))
+}
+
+fn native_set_image_filter(view NativeView, pixelated bool) {
+	layer := macos.msg_id(view, 'layer')
+	if native_is_nil(layer) {
+		return
+	}
+	value := if pixelated { 'nearest' } else { 'linear' }
+	macos.msg_void2(layer, 'setValue:forKeyPath:', macos.nsstring(value), macos.nsstring('minificationFilter'))
+	macos.msg_void2(layer, 'setValue:forKeyPath:', macos.nsstring(value), macos.nsstring('magnificationFilter'))
+}
+
+fn native_image_from_resource(resource ImageResource) NativeView {
+	if resource.state != .ready {
+		return native_nil_view()
+	}
+	input := resource.renderer_input
+	if input.channels != 4 {
+		return native_nil_view()
+	}
+	image := native_cgimage_from_rgba(input.width, input.height, input.pixels)
+	return native_image_from_cgimage(image, input.width, input.height)
+}
+
+fn native_image_from_cgimage(image voidptr, width int, height int) NativeView {
+	if image == unsafe { nil } || width <= 0 || height <= 0 {
+		if image != unsafe { nil } {
+			C.CGImageRelease(image)
+		}
+		return native_nil_view()
+	}
+	representation := macos.msg_id1(macos.alloc('NSBitmapImageRep'), 'initWithCGImage:', macos.Id(image))
+	if native_is_nil(representation) {
+		C.CGImageRelease(image)
+		return native_nil_view()
+	}
+	native := macos.msg_id(macos.alloc('NSImage'), 'init')
+	macos.msg_void_point(native, 'setSize:', macos.point(f64(width), f64(height)))
+	macos.msg_void1(native, 'addRepresentation:', representation)
+	macos.release(representation)
+	C.CGImageRelease(image)
+	return native
+}
+
+fn native_image_from_path(path string) NativeView {
+	if path.trim_space().len == 0 {
+		return native_nil_view()
+	}
+	return macos.msg_id1(macos.alloc('NSImage'), 'initWithContentsOfFile:', macos.nsstring(path))
+}
+
+fn native_install_image(image_view NativeView, key u64, resource_id string, path string, image NativeView) {
+	mut st := state()
+	previous := st.image_states[key] or { NativeImageState{} }
+	macos.msg_void1(image_view, 'setImage:', image)
+	if !native_is_nil(previous.image) {
+		macos.release(previous.image)
+	}
+	st.image_states[key] = NativeImageState{
+		resource_id: resource_id
+		path:        path
+		image:       image
+	}
+}
+
+fn native_clear_pattern(view NativeView) {
+	mut st := state()
+	key := u64(voidptr(view))
+	if image := st.pattern_images[key] {
+		if image != unsafe { nil } {
+			C.CGImageRelease(image)
+		}
+		st.pattern_images.delete(key)
+	}
+	st.pattern_states.delete(key)
+	macos.msg_void_bool(view, 'setNeedsDisplay:', true)
+}
+
+fn native_update_pattern(view NativeView, el Element) {
+	pattern := el.background.pattern
+	mut clip := el.background.clip
+	if clip.width <= 0 || clip.height <= 0 {
+		clip = el.frame
+	}
+	phase := pattern.phase(el.frame)
+	mut st := state()
+	key := u64(voidptr(view))
+	pattern_key := repeat_pattern_cache_key(pattern)
+	current := st.pattern_states[key] or { NativePatternState{} }
+	mut image := st.pattern_images[key] or { unsafe { nil } }
+	if image == unsafe { nil } || current.key != pattern_key {
+		created := native_cgimage_from_rgba(pattern.pixel_width, pattern.pixel_height, pattern.pixels)
+		if created == unsafe { nil } {
+			return
+		}
+		if image != unsafe { nil } {
+			C.CGImageRelease(image)
+		}
+		image = created
+		st.pattern_images[key] = image
+	}
+	st.pattern_states[key] = NativePatternState{
+		key:     pattern_key
+		image:   image
+		pixel_w: pattern.pixel_width
+		pixel_h: pattern.pixel_height
+		tile_w:  pattern.tile_width
+		tile_h:  pattern.tile_height
+		frame_x: el.frame.x
+		frame_y: el.frame.y
+		phase_x: phase.x
+		phase_y: phase.y
+		clip:    clip
+	}
+	macos.msg_void_bool(view, 'setNeedsDisplay:', true)
+}
+
+@[export: 'ui2_pattern_draw_rect']
+fn ui2_pattern_draw_rect(self voidptr, _cmd voidptr, _rect voidptr) {
+	st := state()
+	key := u64(self)
+	pattern := st.pattern_states[key] or { return }
+	image := st.pattern_images[key] or { return }
+	bounds := macos.msg_rect(self, 'bounds')
+	clip := pattern_local_clip(pattern.clip, pattern.frame_x, pattern.frame_y, Rect{
+		width:  bounds.width
+		height: bounds.height
+	})
+	if clip.width <= 0 || clip.height <= 0 {
+		return
+	}
+	graphics := macos.msg_id(macos.get_class('NSGraphicsContext'), 'currentContext')
+	context := macos.msg_id(graphics, 'CGContext')
+	if native_is_nil(context) {
+		return
+	}
+	C.CGContextSaveGState(context)
+	C.CGContextClipToRect(context, macos.rect(clip.x, clip.y, clip.width, clip.height))
+	C.CGContextSetInterpolationQuality(context, 0)
+	if f64(pattern.pixel_w) == pattern.tile_w && f64(pattern.pixel_h) == pattern.tile_h {
+		C.CGContextDrawTiledImage(context, macos.rect(pattern.phase_x - pattern.tile_w,
+			pattern.phase_y - pattern.tile_h, pattern.tile_w, pattern.tile_h), image)
+	} else {
+		native_draw_pattern_tiles(context, image, pattern, clip)
+	}
+	C.CGContextRestoreGState(context)
+}
+
+fn native_draw_pattern_tiles(context voidptr, image voidptr, pattern NativePatternState, clip Rect) {
+	mut x := first_pattern_tile_origin(clip.x, pattern.phase_x, pattern.tile_w)
+	for x < clip.x + clip.width {
+		mut y := first_pattern_tile_origin(clip.y, pattern.phase_y, pattern.tile_h)
+		for y < clip.y + clip.height {
+			C.CGContextDrawImage(context, macos.rect(x, y, pattern.tile_w, pattern.tile_h), image)
+			y += pattern.tile_h
+		}
+		x += pattern.tile_w
 	}
 }
 

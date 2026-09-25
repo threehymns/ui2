@@ -507,3 +507,46 @@ fn font_paths() (string, string) {
 	}
 	return font_pick(font_system_dirs())
 }
+
+pub fn bundled_font_paths() (string, string) {
+	regular := os.join_path(@VMODROOT, 'assets', 'fonts', 'Roboto-Regular.ttf')
+	bold := os.join_path(@VMODROOT, 'assets', 'fonts', 'Roboto-Bold.ttf')
+	return if os.is_file(regular) {
+		regular, if os.is_file(bold) { bold } else { '' }
+	} else {
+		'', ''
+	}
+}
+
+pub fn startup_font_paths() (string, string) {
+	env_regular := os.getenv('UI2_FONT')
+	if env_regular.len > 0 && os.is_file(env_regular) {
+		env_bold := os.getenv('UI2_FONT_BOLD')
+		return env_regular, if os.is_file(env_bold) { env_bold } else { '' }
+	}
+	return bundled_font_paths()
+}
+
+pub struct FontResource {
+pub:
+	ready        bool
+	regular      string
+	bold         string
+	metrics      FontMetrics
+	symbol_paths []string
+}
+
+pub fn discover_font_resource() FontResource {
+	regular, bold := font_paths()
+	mut metrics := FontMetrics{}
+	if regular.len > 0 {
+		metrics = font_file_metrics(regular) or { FontMetrics{} }
+	}
+	return FontResource{
+		ready:        true
+		regular:      regular
+		bold:         bold
+		metrics:      metrics
+		symbol_paths: font_symbol_paths()
+	}
+}

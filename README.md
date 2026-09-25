@@ -265,12 +265,15 @@ is configured for transparency, as demonstrated by `examples/custom_window`.
 `border_width` is shorthand for all four edges; an explicitly declared edge
 overrides it. The equivalent V API fields live directly on `BoxStyle`.
 
-Images load from `image_path` on every backend. The custom renderer caches
-decoded images. Scroll viewports clip both drawing and hit testing.
+Images use the backend-neutral `ImageResource` contract when decoded pixels are
+provided. The legacy `image_path` form remains available for compatibility.
+The custom renderer caches decoded resources. Scroll viewports clip both drawing
+and hit testing.
 
 The Windows backend uses retained Win32 `BUTTON`, `EDIT`, `COMBOBOX`, `STATIC`,
-and custom container windows. Its image control currently loads BMP files and
-its text area is plain-text, so those two controls report `partial` support.
+and custom container windows. It renders decoded `ImageResource` pixels and
+retains the legacy path adapter for compatibility. Its text area remains
+plain-text, so that control reports `partial` support.
 
 Shared state includes `hidden`, `enabled`, `accessibility_role`,
 `accessibility_label`, and `accessibility_value`. Native backends expose these

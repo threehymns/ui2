@@ -132,7 +132,11 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_active_toggles = map[string]bool{}
 	__global g_active_scrolls = map[string]bool{}
 	__global g_image_ids = map[string]int{}
+	__global g_image_resource_ids = map[string]int{}
 	__global g_font_metrics = FontMetrics{}
+	__global g_font_resource = FontResource{}
+	__global g_font_work_started = false
+	__global g_font_work_ch = chan FontResource{cap: 1}
 	__global g_font_files = map[string]string{}
 	__global g_font_indexed = false
 	__global g_font_family_files = map[string]string{}
@@ -140,7 +144,11 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_font_symbol_ids = []int{}
 	__global g_font_symbol_bases = map[int]bool{}
 	__global g_font_symbol_fons = voidptr(unsafe { nil })
+	__global g_first_frame_complete = false
 	__global g_active_images = map[string]bool{}
+	__global g_active_image_resources = map[string]bool{}
+	__global g_image_element_resources = map[string]ImageResource{}
+	__global g_active_image_elements = map[string]bool{}
 	__global g_open_dropdown = ''
 	__global g_dropdown_popup = DropdownPopup{}
 	__global g_dropdown_hover = -1
@@ -151,6 +159,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_shared_samplers_init = false
 	__global g_shared_sampler_linear = gfx.Sampler{}
 	__global g_shared_sampler_nearest = gfx.Sampler{}
+	__global g_repeat_pattern_ids = map[string]int{}
+	__global g_repeat_pattern_pixels = map[string][]u8{}
+	__global g_shared_repeat_sampler_init = false
+	__global g_shared_repeat_sampler = gfx.Sampler{}
 
 	// Map values are copied byte-for-byte when an existing key is replaced.
 	// Unlike keys, their nested strings are not released by map.set. The text
@@ -209,6 +221,29 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_text_kinds.delete(id)
 	}
 
+	fn font_work_worker(ch chan FontResource) {
+		ch <- discover_font_resource()
+	}
+
+	fn start_font_work() {
+		if g_font_work_started {
+			return
+		}
+		g_font_work_started = true
+		trace_startup_phase(.font_work)
+		spawn font_work_worker(g_font_work_ch)
+	}
+
+	fn poll_font_work() {
+		select {
+			resource := <-g_font_work_ch {
+				g_font_resource = resource
+				g_font_metrics = resource.metrics
+			}
+			else {}
+		}
+	}
+
 	// ── Public API ─────────────────────────────────────────────────────
 
 	pub fn bounds() Rect {
@@ -249,13 +284,12 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_event_handler = event_fn
 		configure_animation_driver(request_refresh, false)
 		publish_menu_context(event_fn, title, unsafe { nil })
-		// Choosing the font here rather than letting gg ask `fc-match` for one
-		// keeps the window legible and identical across distributions, and
-		// gives draw_text the metrics it needs to size text in points.
-		font_regular, font_bold := font_paths()
-		if font_regular.len > 0 {
-			g_font_metrics = font_file_metrics(font_regular) or { FontMetrics{} }
-		}
+		g_font_metrics = if g_font_resource.ready { g_font_resource.metrics } else { FontMetrics{} }
+		g_font_work_started = g_font_resource.ready
+		g_first_frame_complete = false
+		trace_startup_phase(.ui2_setup)
+		font_regular, font_bold := startup_font_paths()
+		trace_startup_phase(.window_creation)
 		g_gg_app.ctx = gg.new_context(
 			bg_color: hex_color(0xf4f6f8)
 			font_path: font_regular
@@ -275,6 +309,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			max_dropped_files: 32
 			max_dropped_file_path_length: 4096
 		)
+		start_font_work()
 		g_gg_app.ctx.run()
 	}
 
@@ -563,12 +598,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	// ── Frame & event loop ─────────────────────────────────────────────
 
 	fn on_init(_ &GgApp) {
-		if voidptr(g_build_screen) == unsafe { nil } {
-			return
-		}
-		// gg/Sokol must receive images during initialization to make their GPU
-		// textures available for the first rendered frame.
-		preload_images(g_build_screen())
+		trace_startup_phase(.gpu_context_initialization)
 	}
 
 	fn on_frame(app &GgApp) {
@@ -576,6 +606,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return
 		}
 		mut ctx := app.ctx
+		poll_font_work()
+		if g_first_frame_complete && g_font_resource.ready {
+			ensure_symbol_fallbacks(ctx)
+		}
 		// Some window managers can choose a client size different from the one
 		// requested in gg.Config before gg's cached resize event catches up. UI2
 		// lays out and clips against that cache, so synchronize it from Sokol's
@@ -588,10 +622,6 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			ctx.window.width = live_size.width
 			ctx.window.height = live_size.height
 		}
-		// gg builds its fonts in the sokol init callback, after the window has
-		// been created, so the fallback chain is attached on the way into the
-		// first frame rather than in run_window.
-		ensure_symbol_fallbacks(ctx)
 		mut root := Element{}
 		mut has_root := false
 		if voidptr(g_build_screen) != unsafe { nil } {
@@ -604,6 +634,8 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			g_active_toggles = map[string]bool{}
 			g_active_scrolls = map[string]bool{}
 			g_active_images = map[string]bool{}
+			g_active_image_resources = map[string]bool{}
+			g_active_image_elements = map[string]bool{}
 			root = apply_widget_animations(g_build_screen())
 			validate_element_tree(root) or {
 				eprintln('ui2: ${err}')
@@ -634,6 +666,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		check_long_press()
 		ctx.end()
+		trace_frame_complete()
+		if !g_first_frame_complete {
+			g_first_frame_complete = true
+		}
 	}
 
 	fn on_event(e &gg.Event, _ &GgApp) {
@@ -1664,9 +1700,36 @@ fn page_focused_text_area(direction int) {
 			image_ctx.remove_cached_image_by_idx(image_id)
 			g_image_ids.delete(path)
 		}
+		mut stale_resources := []string{}
+		for id, _ in g_image_resource_ids {
+			if id !in g_active_image_resources {
+				stale_resources << id
+			}
+		}
+		for id in stale_resources {
+			image_id := g_image_resource_ids[id] or { continue }
+			image_ctx.remove_cached_image_by_idx(image_id)
+			g_image_resource_ids.delete(id)
+		}
+		mut stale_image_elements := []string{}
+		for id, _ in g_image_element_resources {
+			if id !in g_active_image_elements {
+				stale_image_elements << id
+			}
+		}
+		for id in stale_image_elements {
+			g_image_element_resources.delete(id)
+		}
 	}
 
 	// ── Rendering ──────────────────────────────────────────────────────
+
+	fn custom_image_resource_for_element(current ImageResource, previous ImageResource) ImageResource {
+		if current.id.len > 0 && current.state != .ready && previous.state == .ready {
+			return previous
+		}
+		return current
+	}
 
 	fn render_element(ctx &gg.Context, el Element, off_x f64, off_y f64, clip Rect, scroll_parent_id string) {
 		if el.hidden {
@@ -1688,6 +1751,9 @@ fn page_focused_text_area(direction int) {
 			.view {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
+				if el.background.pattern.valid() {
+					draw_repeat_pattern(ctx, el, x, y, off_x, off_y, clip)
+				}
 				if !el.box.transparent {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, el.box.bg, el.box.radius)
 				}
@@ -1755,10 +1821,40 @@ fn page_focused_text_area(direction int) {
 			.image {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
-				if el.image_path.trim_space().len > 0
-					&& !draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
-					el.rotation, el.pixelated, el.flip_h, el.flip_v) {
+				image_key := if el.id.len > 0 {
+					el.id
+				} else if el.image_resource.id.len > 0 {
+					el.image_resource.id
+				} else {
+					el.image_path
+				}
+				if image_key.len > 0 {
+					g_active_image_elements[image_key] = true
+				}
+				previous := g_image_element_resources[image_key] or { ImageResource{} }
+				resource := custom_image_resource_for_element(el.image_resource, previous)
+				mut drew := false
+				if resource.id.len > 0 {
+					if resource.state == .ready {
+						drew = draw_cached_image_resource(ctx, resource, x, y, el.frame.width,
+							el.frame.height, el.rotation, el.pixelated, el.flip_h, el.flip_v)
+					}
+				} else if el.image_path.trim_space().len > 0 {
+					drew = draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
+						el.rotation, el.pixelated, el.flip_h, el.flip_v)
+				}
+				if resource.id.len > 0 && resource.state == .ready && !drew
+					&& previous.id.len > 0 && previous.state == .ready {
+					drew = draw_cached_image_resource(ctx, previous, x, y, el.frame.width,
+						el.frame.height, el.rotation, el.pixelated, el.flip_h, el.flip_v)
+				}
+				if !drew && el.image_resource.id.len == 0 && el.image_path.trim_space().len > 0 {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
+				}
+				if el.image_resource.id.len > 0 && el.image_resource.state == .ready && drew {
+					g_image_element_resources[image_key] = el.image_resource
+				} else if el.image_resource.id.len == 0 {
+					g_image_element_resources.delete(image_key)
 				}
 				if el.enabled && element_action_id(el).len > 0 && (el.clickable || el.draggable) {
 					add_hit_target(HitTarget{
@@ -2240,24 +2336,52 @@ fn page_focused_text_area(direction int) {
 		return if nearest { g_shared_sampler_nearest } else { g_shared_sampler_linear }
 	}
 
-	// image_texture_flips maps screen-space mirroring to the texture-space
-	// flip flags gg applies. Rotation swaps the local axes, so at 90/270
-	// degrees a horizontal screen mirror samples the texture vertically and
-	// vice versa.
-	fn image_texture_flips(rotation f64, flip_h bool, flip_v bool) (bool, bool) {
-		norm_rot := int(math.fmod(rotation, 360.0))
-		positive_rot := (norm_rot % 360 + 360) % 360
-		if positive_rot == 90 || positive_rot == 270 {
-			return flip_v, flip_h
+	fn shared_repeat_sampler() gfx.Sampler {
+		if !g_shared_repeat_sampler_init {
+			mut desc := gfx.SamplerDesc{
+				min_filter:    .nearest
+				mag_filter:    .nearest
+				mipmap_filter: .nearest
+				wrap_u:        .repeat
+				wrap_v:        .repeat
+			}
+			g_shared_repeat_sampler = gfx.make_sampler(&desc)
+			g_shared_repeat_sampler_init = true
 		}
-		return flip_h, flip_v
+		return g_shared_repeat_sampler
 	}
 
-	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
-		if !cache_image(path) {
-			return false
+	fn draw_repeat_pattern(ctx &gg.Context, el Element, x f64, y f64, off_x f64, off_y f64, clip Rect) {
+		pattern := el.background.pattern
+		if !cache_repeat_pattern(pattern) {
+			return
 		}
-		image_id := g_image_ids[path] or { return false }
+		image_id := g_repeat_pattern_ids[repeat_pattern_cache_key(pattern)] or { return }
+		visible := el.background.visible_rect(off_x, off_y, el.frame, clip)
+		if visible.width <= 0 || visible.height <= 0 {
+			return
+		}
+		source := pattern.source_rect(el.frame)
+		apply_clip(ctx, visible)
+		ctx.draw_image_with_config(
+			img_id: image_id
+			img_rect: gg.Rect{
+				x: f32(x)
+				y: f32(y)
+				width: f32(el.frame.width)
+				height: f32(el.frame.height)
+			}
+			part_rect: gg.Rect{
+				x: f32(source.x)
+				y: f32(source.y)
+				width: f32(source.width)
+				height: f32(source.height)
+			}
+		)
+		apply_clip(ctx, clip)
+	}
+
+	fn draw_cached_image_id(ctx &gg.Context, image_id int, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
 		mut image_ctx := g_gg_app.ctx
 		mut cached_image := image_ctx.get_cached_image_by_idx(image_id)
 		if !cached_image.ok {
@@ -2297,6 +2421,24 @@ fn page_focused_text_area(direction int) {
 			flip_y:   flip_y
 		)
 		return true
+	}
+
+	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
+		if !cache_image(path) {
+			return false
+		}
+		image_id := g_image_ids[path] or { return false }
+		return draw_cached_image_id(ctx, image_id, x, y, width, height, rotation, pixelated,
+			flip_h, flip_v)
+	}
+
+	fn draw_cached_image_resource(ctx &gg.Context, resource ImageResource, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
+		if !cache_image_resource(resource) {
+			return false
+		}
+		image_id := g_image_resource_ids[resource.id] or { return false }
+		return draw_cached_image_id(ctx, image_id, x, y, width, height, rotation, pixelated,
+			flip_h, flip_v)
 	}
 
 	struct ButtonImageLayout {
@@ -2463,9 +2605,17 @@ fn page_focused_text_area(direction int) {
 		if el.hidden {
 			return
 		}
-		if el.kind == .image
-			|| (el.kind == .button && el.image_path.trim_space().len > 0
-			&& !el.image_path.starts_with('symbol:')) {
+		if el.background.pattern.valid() {
+			cache_repeat_pattern(el.background.pattern)
+		}
+		if el.kind == .image {
+			if el.image_resource.id.len > 0 {
+				cache_image_resource(el.image_resource)
+			} else {
+				cache_image(el.image_path)
+			}
+		} else if el.kind == .button && el.image_path.trim_space().len > 0
+			&& !el.image_path.starts_with('symbol:') {
 			cache_image(el.image_path)
 		}
 		for child in el.children {
@@ -2494,6 +2644,68 @@ fn page_focused_text_area(direction int) {
 			return false
 		}
 		g_image_ids[path] = loaded_image.id
+		return true
+	}
+
+	fn cache_image_resource(resource ImageResource) bool {
+		if resource.id.len == 0 {
+			return false
+		}
+		g_active_image_resources[resource.id] = true
+		if resource.state != .ready {
+			return false
+		}
+		if resource.id in g_image_resource_ids {
+			return true
+		}
+		input := resource.renderer_input
+		request := image_resource_texture_request(input)
+		if !request.texture_request_valid() || g_gg_app.ctx == unsafe { nil } {
+			return false
+		}
+		mut resource_image := gg.Image{
+			width:       request.width
+			height:      request.height
+			nr_channels: request.channels
+			nr_mipmaps:  request.mipmaps
+			data:        input.pixels.data
+			path:        resource.source
+		}
+		resource_image.init_sokol_image()
+		if !resource_image.ok {
+			return false
+		}
+		image_id := g_gg_app.ctx.cache_image(resource_image)
+		g_image_resource_ids[resource.id] = image_id
+		return image_id >= 0
+	}
+
+	fn cache_repeat_pattern(pattern RepeatPattern) bool {
+		if !pattern.valid() || g_gg_app.ctx == unsafe { nil } {
+			return false
+		}
+		key := repeat_pattern_cache_key(pattern)
+		if key in g_repeat_pattern_ids {
+			return true
+		}
+		mut pixels := pattern.pixels.clone()
+		mut tile := gg.Image{
+			width:       pattern.pixel_width
+			height:      pattern.pixel_height
+			nr_channels: 4
+			data:        pixels.data
+			path:        key
+			nr_mipmaps:  1
+		}
+		tile.init_sokol_image()
+		if !tile.ok {
+			return false
+		}
+		image_id := g_gg_app.ctx.cache_image(tile)
+		mut cached := g_gg_app.ctx.get_cached_image_by_idx(image_id)
+		cached.ssmp = shared_repeat_sampler()
+		g_repeat_pattern_pixels[key] = pixels
+		g_repeat_pattern_ids[key] = image_id
 		return true
 	}
 
@@ -2654,6 +2866,9 @@ fn page_focused_text_area(direction int) {
 		if os.is_file(family) {
 			path = family
 		} else {
+			if !g_first_frame_complete {
+				return ''
+			}
 			if !g_font_indexed {
 				mut dirs := font_bundle_dirs()
 				dirs << font_system_dirs()
@@ -2697,7 +2912,12 @@ fn page_focused_text_area(direction int) {
 			g_text_area_layouts = map[string]TextAreaLayout{}
 			g_font_symbol_ids = []int{}
 			g_font_symbol_bases = map[int]bool{}
-			for path in font_symbol_paths() {
+			paths := if g_font_resource.ready {
+				g_font_resource.symbol_paths
+			} else {
+				font_symbol_paths()
+			}
+			for path in paths {
 				bytes := os.read_bytes(path) or { continue }
 				id := fons.add_font_mem(path, bytes, true)
 				if id != fontstash.invalid {

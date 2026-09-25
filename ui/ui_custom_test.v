@@ -19,6 +19,28 @@ $if ui2_custom_rendering ? {
 		assert control_support(.text_area) == .partial
 	}
 
+	fn test_custom_image_resource_states_retain_previous_ready() {
+		ready := ready_image_resource('custom-ready', 'ready.png', ImageResourceInput{
+			width:    1
+			height:   1
+			channels: 4
+			pixels:   []u8{len: 4, init: 255}
+		}, .has_alpha)
+		loading := loading_image_resource('custom-loading', 'loading.png')
+		failed := error_image_resource('custom-error', 'error.png', 'failed')
+		assert custom_image_resource_for_element(loading, ready).id == ready.id
+		assert custom_image_resource_for_element(failed, ready).id == ready.id
+		assert custom_image_resource_for_element(loading, ImageResource{}).id == loading.id
+		assert custom_image_resource_for_element(ImageResource{}, ready).id == ''
+		latest := ready_image_resource('custom-latest', 'latest.png', ImageResourceInput{
+			width:    1
+			height:   1
+			channels: 4
+			pixels:   []u8{len: 4, init: 255}
+		}, .proven_opaque)
+		assert custom_image_resource_for_element(latest, ready).id == latest.id
+	}
+
 	fn test_custom_desktop_backend_exposes_desktop_hooks() {
 		on_key(custom_test_key_handler)
 		on_key_event(custom_test_key_event_handler)
@@ -47,8 +69,8 @@ $if ui2_custom_rendering ? {
 		g_focused_field = 'field'
 		replace_text_value('field', 'abc')
 		replace_text_editor('field', text_editor('abc'.clone()))
-		handle_key_down(.left)
-		handle_key_down(.backspace)
+		handle_key_down(.left, 0)
+		handle_key_down(.backspace, 0)
 		handle_char_input(`x`)
 		assert text('field') == 'axc'
 		forget_text_state('field')

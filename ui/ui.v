@@ -347,6 +347,8 @@ pub:
 	text                  string
 	checked               bool // checkbox: declared on/off state
 	image_path            string
+	image_resource        ImageResource
+	background            PatternBackground
 	tooltip               string
 	placeholder           string
 	frame                 Rect
@@ -425,7 +427,7 @@ pub fn control_support(kind Kind) BackendSupport {
 		}
 	} $else $if windows {
 		return match kind {
-			.image, .text_area { .partial }
+			.text_area { .partial }
 			else { .supported }
 		}
 	} $else {
