@@ -30,7 +30,7 @@ $if ui2_custom_rendering ? {
 		failed := error_image_resource('custom-error', 'error.png', 'failed')
 		assert custom_image_resource_for_element(loading, ready).id == ready.id
 		assert custom_image_resource_for_element(failed, ready).id == ready.id
-		assert custom_image_resource_for_element(loading, ImageResource{}).id == ''
+		assert custom_image_resource_for_element(loading, ImageResource{}).id == loading.id
 		assert custom_image_resource_for_element(ImageResource{}, ready).id == ''
 		latest := ready_image_resource('custom-latest', 'latest.png', ImageResourceInput{
 			width:    1
