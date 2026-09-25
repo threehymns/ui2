@@ -23,10 +23,10 @@ fn test_image_resource_states_and_opacity_are_explicit() {
 
 	pixels := image_resource_test_pixels()
 	ready := ready_image_resource('ready-id', 'sample.png', ImageResourceInput{
-		width: 2
-		height: 1
+		width:    2
+		height:   1
 		channels: 4
-		pixels: pixels
+		pixels:   pixels
 	}, .has_alpha)
 	assert ready.state == .ready
 	assert ready.opacity == .has_alpha
@@ -47,10 +47,10 @@ fn test_ready_image_resource_preserves_each_opacity_state() {
 	pixels := image_resource_test_pixels()
 	for opacity in [ImageOpacity.unknown, .proven_opaque, .has_alpha] {
 		resource := ready_image_resource('ready-id', 'sample.png', ImageResourceInput{
-			width: 2
-			height: 1
+			width:    2
+			height:   1
 			channels: 4
-			pixels: pixels
+			pixels:   pixels
 		}, opacity)
 		assert resource.state == .ready
 		assert resource.opacity == opacity
@@ -62,16 +62,16 @@ fn test_renderer_ready_requires_valid_decoded_rgba_pixels() {
 	invalid_inputs := [
 		ImageResourceInput{},
 		ImageResourceInput{
-			width: 1
-			height: 1
+			width:    1
+			height:   1
 			channels: 3
-			pixels: []u8{len: 3, init: 255}
+			pixels:   []u8{len: 3, init: 255}
 		},
 		ImageResourceInput{
-			width: 2
-			height: 1
+			width:    2
+			height:   1
 			channels: 4
-			pixels: []u8{len: 7, init: 255}
+			pixels:   []u8{len: 7, init: 255}
 		},
 	]
 	for input in invalid_inputs {
@@ -79,19 +79,19 @@ fn test_renderer_ready_requires_valid_decoded_rgba_pixels() {
 		assert !ready_image_resource('ready-id', 'sample.png', input, .unknown).renderer_ready()
 	}
 	assert !ready_image_resource('', 'sample.png', ImageResourceInput{
-		width: 1
-		height: 1
+		width:    1
+		height:   1
 		channels: 4
-		pixels: []u8{len: 4, init: 255}
+		pixels:   []u8{len: 4, init: 255}
 	}, .proven_opaque).renderer_ready()
 }
 
 fn test_resource_image_constructor_preserves_transform_fields_and_path_adapter() {
 	resource := ready_image_resource('ready-id', 'sample.png', ImageResourceInput{
-		width: 4
-		height: 3
+		width:    4
+		height:   3
 		channels: 4
-		pixels: []u8{len: 48, init: 255}
+		pixels:   []u8{len: 48, init: 255}
 	}, .proven_opaque)
 	element := transformed_image_resource('photo', resource, rect(2, 3, 40, 30), 90, true)
 	assert element.kind == .image
@@ -150,22 +150,22 @@ fn test_legacy_image_constructor_remains_path_compatible() {
 
 fn test_image_resource_contract_covers_opaque_unknown_alpha_loading_and_error() {
 	opaque := ready_image_resource('opaque', 'opaque.png', ImageResourceInput{
-		width: 1
-		height: 1
+		width:    1
+		height:   1
 		channels: 4
-		pixels: []u8{len: 4, init: 255}
+		pixels:   []u8{len: 4, init: 255}
 	}, .proven_opaque)
 	unknown := ready_image_resource('unknown', 'unknown.png', ImageResourceInput{
-		width: 1
-		height: 1
+		width:    1
+		height:   1
 		channels: 4
-		pixels: []u8{len: 4, init: 255}
+		pixels:   []u8{len: 4, init: 255}
 	}, .unknown)
 	alpha := ready_image_resource('alpha', 'alpha.png', ImageResourceInput{
-		width: 1
-		height: 1
+		width:    1
+		height:   1
 		channels: 4
-		pixels: []u8{len: 4, init: 255}
+		pixels:   []u8{len: 4, init: 255}
 	}, .has_alpha)
 	loading := loading_image_resource('loading', 'loading.png')
 	failed := error_image_resource('error', 'error.png', 'decode failed')
@@ -183,10 +183,10 @@ fn test_image_resource_contract_covers_opaque_unknown_alpha_loading_and_error() 
 
 fn test_image_resource_element_preserves_all_image_transform_fields() {
 	resource := ready_image_resource('resource', 'sample.png', ImageResourceInput{
-		width: 1
-		height: 1
+		width:    1
+		height:   1
 		channels: 4
-		pixels: []u8{len: 4, init: 255}
+		pixels:   []u8{len: 4, init: 255}
 	}, .has_alpha)
 	mut element := transformed_image_resource_with_cursor('photo', resource, rect(4, 5, 20, 10), 180, true, 'crosshair')
 	element = with_flip_h(element)
@@ -200,4 +200,33 @@ fn test_image_resource_element_preserves_all_image_transform_fields() {
 	assert element.flip_h
 	assert element.flip_v
 	assert element.pixelated
+}
+
+fn test_image_resource_texture_request_uses_a_single_mip_level() {
+	request := image_resource_texture_request(ImageResourceInput{
+		width:    3840
+		height:   2160
+		channels: 4
+		pixels:   []u8{len: 4, init: 255}
+	})
+	assert request.width == 3840
+	assert request.height == 2160
+	assert request.channels == 4
+	assert request.mipmaps == 1
+}
+
+fn test_image_resource_texture_request_reports_missing_pixels() {
+	assert !image_resource_texture_request(ImageResourceInput{
+		width:    2
+		height:   2
+		channels: 4
+		pixels:   []u8{len: 4, init: 255}
+	}).texture_request_valid()
+	assert !image_resource_texture_request(ImageResourceInput{}).texture_request_valid()
+	assert image_resource_texture_request(ImageResourceInput{
+		width:    1
+		height:   1
+		channels: 4
+		pixels:   []u8{len: 4, init: 255}
+	}).texture_request_valid()
 }

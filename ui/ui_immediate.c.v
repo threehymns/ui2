@@ -2659,17 +2659,15 @@ fn page_focused_text_area(direction int) {
 			return true
 		}
 		input := resource.renderer_input
-		if input.width <= 0 || input.height <= 0 || input.channels != 4 {
-			return false
-		}
-		pixel_len := input.width * input.height * 4
-		if input.pixels.len < pixel_len || g_gg_app.ctx == unsafe { nil } {
+		request := image_resource_texture_request(input)
+		if !request.texture_request_valid() || g_gg_app.ctx == unsafe { nil } {
 			return false
 		}
 		mut resource_image := gg.Image{
-			width:       input.width
-			height:      input.height
-			nr_channels: 4
+			width:       request.width
+			height:      request.height
+			nr_channels: request.channels
+			nr_mipmaps:  request.mipmaps
 			data:        input.pixels.data
 			path:        resource.source
 		}

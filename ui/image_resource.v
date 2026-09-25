@@ -16,10 +16,10 @@ pub enum ImageOpacity {
 
 pub struct ImageResourceInput {
 pub:
-	width   int
-	height  int
+	width    int
+	height   int
 	channels int
-	pixels  []u8
+	pixels   []u8
 }
 
 pub struct ImageResource {
@@ -34,9 +34,9 @@ pub:
 
 pub fn loading_image_resource(id string, source string) ImageResource {
 	return ImageResource{
-		id:     id
-		source: source
-		state:  .loading
+		id:      id
+		source:  source
+		state:   .loading
 		opacity: .unknown
 	}
 }
@@ -63,9 +63,9 @@ pub fn error_image_resource(id string, source string, message string) ImageResou
 
 pub fn legacy_image_resource(source string, width int, height int) ImageResource {
 	return ImageResource{
-		source: source
-		state:  .ready
-		opacity: .unknown
+		source:         source
+		state:          .ready
+		opacity:        .unknown
 		renderer_input: ImageResourceInput{
 			width:    width
 			height:   height
@@ -95,6 +95,36 @@ pub fn (input ImageResourceInput) valid() bool {
 		return false
 	}
 	return input.width <= input.pixels.len / input.height / input.channels
+}
+
+pub struct ImageResourceTextureRequest {
+pub:
+	width       int
+	height      int
+	channels    int
+	mipmaps     int
+	pixel_bytes int
+}
+
+pub fn (request ImageResourceTextureRequest) texture_request_valid() bool {
+	if request.width <= 0 || request.height <= 0 || request.channels != 4 || request.mipmaps < 1 {
+		return false
+	}
+	return request.pixel_bytes >= request.width * request.height * request.channels
+}
+
+// image_resource_texture_request describes the renderer texture for a decoded
+// resource. It asks for a single mip level on purpose: a full chain is expanded
+// on the CPU by the renderer before the texture is created, which measured
+// 359-517 ms for a 3840x2160 image and blocked the frame that showed it.
+pub fn image_resource_texture_request(input ImageResourceInput) ImageResourceTextureRequest {
+	return ImageResourceTextureRequest{
+		width:       input.width
+		height:      input.height
+		channels:    input.channels
+		mipmaps:     1
+		pixel_bytes: input.pixels.len
+	}
 }
 
 pub fn (resource ImageResource) renderer_ready() bool {
@@ -155,12 +185,18 @@ pub fn image_source_uv(frame Rect, rotation f64, flip_h bool, flip_v bool, scree
 	mut y := dy
 	if normalized % 90 == 0 {
 		match normalized {
-			90 { x = dy
-				y = -dx }
-			180 { x = -dx
-				y = -dy }
-			270 { x = -dy
-				y = dx }
+			90 {
+				x = dy
+				y = -dx
+			}
+			180 {
+				x = -dx
+				y = -dy
+			}
+			270 {
+				x = -dy
+				y = dx
+			}
 			else {}
 		}
 	} else {
@@ -181,18 +217,18 @@ pub fn image_source_uv(frame Rect, rotation f64, flip_h bool, flip_v bool, scree
 
 pub fn image_resource(id string, resource ImageResource, frame Rect) Element {
 	return Element{
-		kind:          .image
-		id:            id
-		image_path:    resource.source
+		kind:           .image
+		id:             id
+		image_path:     resource.source
 		image_resource: resource
-		frame:         frame
+		frame:          frame
 	}
 }
 
 pub fn transformed_image_resource(id string, resource ImageResource, frame Rect, rotation f64, clickable bool) Element {
 	return Element{
 		...image_resource(id, resource, frame)
-		rotation: rotation
+		rotation:  rotation
 		clickable: clickable
 	}
 }
@@ -200,9 +236,9 @@ pub fn transformed_image_resource(id string, resource ImageResource, frame Rect,
 pub fn transformed_image_resource_with_cursor(id string, resource ImageResource, frame Rect, rotation f64, clickable bool, cursor string) Element {
 	return Element{
 		...image_resource(id, resource, frame)
-		rotation: rotation
+		rotation:  rotation
 		clickable: clickable
-		cursor: cursor
+		cursor:    cursor
 	}
 }
 
