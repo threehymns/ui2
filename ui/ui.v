@@ -347,6 +347,7 @@ pub:
 	text                  string
 	checked               bool // checkbox: declared on/off state
 	image_path            string
+	image_resource        ImageResource
 	tooltip               string
 	placeholder           string
 	frame                 Rect
