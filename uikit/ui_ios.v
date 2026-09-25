@@ -994,7 +994,7 @@ fn native_create_element(el Element) View {
 		.label {
 			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
-		.image { new_image_view(el.frame, el.image_path, el.rotation) }
+		.image { new_image_view(el.frame, image_path_for_element(el), el.rotation) }
 		.button {
 			new_button_view(el.frame, el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.lines)
 		}
@@ -1028,7 +1028,7 @@ fn native_update_element(native View, el Element, declared_text_changed bool) {
 		.label {
 			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
-		.image { update_image_view(native, el.frame, el.image_path, el.rotation) }
+		.image { update_image_view(native, el.frame, image_path_for_element(el), el.rotation) }
 		.button {
 			update_button_view(native, el.frame, el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.lines)
 		}

@@ -132,6 +132,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_active_toggles = map[string]bool{}
 	__global g_active_scrolls = map[string]bool{}
 	__global g_image_ids = map[string]int{}
+	__global g_image_resource_ids = map[string]int{}
 	__global g_font_metrics = FontMetrics{}
 	__global g_font_files = map[string]string{}
 	__global g_font_indexed = false
@@ -141,6 +142,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_font_symbol_bases = map[int]bool{}
 	__global g_font_symbol_fons = voidptr(unsafe { nil })
 	__global g_active_images = map[string]bool{}
+	__global g_active_image_resources = map[string]bool{}
 	__global g_open_dropdown = ''
 	__global g_dropdown_popup = DropdownPopup{}
 	__global g_dropdown_hover = -1
@@ -604,6 +606,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			g_active_toggles = map[string]bool{}
 			g_active_scrolls = map[string]bool{}
 			g_active_images = map[string]bool{}
+			g_active_image_resources = map[string]bool{}
 			root = apply_widget_animations(g_build_screen())
 			validate_element_tree(root) or {
 				eprintln('ui2: ${err}')
@@ -1664,6 +1667,17 @@ fn page_focused_text_area(direction int) {
 			image_ctx.remove_cached_image_by_idx(image_id)
 			g_image_ids.delete(path)
 		}
+		mut stale_resources := []string{}
+		for id, _ in g_image_resource_ids {
+			if id !in g_active_image_resources {
+				stale_resources << id
+			}
+		}
+		for id in stale_resources {
+			image_id := g_image_resource_ids[id] or { continue }
+			image_ctx.remove_cached_image_by_idx(image_id)
+			g_image_resource_ids.delete(id)
+		}
 	}
 
 	// ── Rendering ──────────────────────────────────────────────────────
@@ -1755,7 +1769,14 @@ fn page_focused_text_area(direction int) {
 			.image {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
-				if el.image_path.trim_space().len > 0
+				if el.image_resource.id.len > 0 {
+					if el.image_resource.state == .ready
+						&& !draw_cached_image_resource(ctx, el.image_resource, x, y,
+						el.frame.width, el.frame.height, el.rotation, el.pixelated,
+						el.flip_h, el.flip_v) {
+						draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
+					}
+				} else if el.image_path.trim_space().len > 0
 					&& !draw_cached_image(ctx, el.image_path, x, y, el.frame.width, el.frame.height,
 					el.rotation, el.pixelated, el.flip_h, el.flip_v) {
 					draw_rect(ctx, x, y, el.frame.width, el.frame.height, 0xe8ecef, 0)
@@ -2253,11 +2274,7 @@ fn page_focused_text_area(direction int) {
 		return flip_h, flip_v
 	}
 
-	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
-		if !cache_image(path) {
-			return false
-		}
-		image_id := g_image_ids[path] or { return false }
+	fn draw_cached_image_id(ctx &gg.Context, image_id int, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
 		mut image_ctx := g_gg_app.ctx
 		mut cached_image := image_ctx.get_cached_image_by_idx(image_id)
 		if !cached_image.ok {
@@ -2297,6 +2314,24 @@ fn page_focused_text_area(direction int) {
 			flip_y:   flip_y
 		)
 		return true
+	}
+
+	fn draw_cached_image(ctx &gg.Context, path string, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
+		if !cache_image(path) {
+			return false
+		}
+		image_id := g_image_ids[path] or { return false }
+		return draw_cached_image_id(ctx, image_id, x, y, width, height, rotation, pixelated,
+			flip_h, flip_v)
+	}
+
+	fn draw_cached_image_resource(ctx &gg.Context, resource ImageResource, x f64, y f64, width f64, height f64, rotation f64, pixelated bool, flip_h bool, flip_v bool) bool {
+		if !cache_image_resource(resource) {
+			return false
+		}
+		image_id := g_image_resource_ids[resource.id] or { return false }
+		return draw_cached_image_id(ctx, image_id, x, y, width, height, rotation, pixelated,
+			flip_h, flip_v)
 	}
 
 	struct ButtonImageLayout {
@@ -2463,9 +2498,14 @@ fn page_focused_text_area(direction int) {
 		if el.hidden {
 			return
 		}
-		if el.kind == .image
-			|| (el.kind == .button && el.image_path.trim_space().len > 0
-			&& !el.image_path.starts_with('symbol:')) {
+		if el.kind == .image {
+			if el.image_resource.id.len > 0 {
+				cache_image_resource(el.image_resource)
+			} else {
+				cache_image(el.image_path)
+			}
+		} else if el.kind == .button && el.image_path.trim_space().len > 0
+			&& !el.image_path.starts_with('symbol:') {
 			cache_image(el.image_path)
 		}
 		for child in el.children {
@@ -2495,6 +2535,41 @@ fn page_focused_text_area(direction int) {
 		}
 		g_image_ids[path] = loaded_image.id
 		return true
+	}
+
+	fn cache_image_resource(resource ImageResource) bool {
+		if resource.id.len == 0 {
+			return false
+		}
+		g_active_image_resources[resource.id] = true
+		if resource.state != .ready {
+			return false
+		}
+		if resource.id in g_image_resource_ids {
+			return true
+		}
+		input := resource.renderer_input
+		if input.width <= 0 || input.height <= 0 || input.channels != 4 {
+			return false
+		}
+		pixel_len := input.width * input.height * 4
+		if input.pixels.len < pixel_len || g_gg_app.ctx == unsafe { nil } {
+			return false
+		}
+		mut resource_image := gg.Image{
+			width:       input.width
+			height:      input.height
+			nr_channels: 4
+			data:        input.pixels.data
+			path:        resource.source
+		}
+		resource_image.init_sokol_image()
+		if !resource_image.ok {
+			return false
+		}
+		image_id := g_gg_app.ctx.cache_image(resource_image)
+		g_image_resource_ids[resource.id] = image_id
+		return image_id >= 0
 	}
 
 	// ── Drawing helpers ────────────────────────────────────────────────

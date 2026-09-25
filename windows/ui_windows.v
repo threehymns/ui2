@@ -1100,12 +1100,13 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 			unsafe { free(wide_placeholder) }
 		}
 		.image {
-			image_sig := '${el.image_path.bytes().hex()}:${int(el.frame.width)}:${int(el.frame.height)}'
+			image_source := image_path_for_element(el)
+			image_sig := '${el.image_resource.id}:${int(el.image_resource.state)}:${image_source.bytes().hex()}:${int(el.frame.width)}:${int(el.frame.height)}'
 			if created || (st.node_image_path[key] or { '' }) != image_sig {
-				wide_path := el.image_path.to_wide()
+				wide_path := image_source.to_wide()
 				bitmap := C.ui2_win_set_bitmap(hwnd, wide_path, int(el.frame.width), int(el.frame.height))
-				if bitmap == unsafe { nil } && el.image_path.len > 0 {
-					eprintln('ui2: Windows native images currently require a BMP file: ${el.image_path}')
+				if bitmap == unsafe { nil } && image_source.len > 0 {
+					eprintln('ui2: Windows native images currently require a BMP file: ${image_source}')
 				}
 				if bitmap == unsafe { nil } {
 					st.images.delete(key)

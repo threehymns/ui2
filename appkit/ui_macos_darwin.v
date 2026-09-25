@@ -1244,7 +1244,7 @@ fn native_create_element(el Element) NativeView {
 			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
-			native_new_image(element_rect(el.frame), el.image_path, el.rotation)
+			native_new_image(element_rect(el.frame), image_path_for_element(el), el.rotation)
 		}
 		.button {
 			native_new_button(element_rect(el.frame), el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, el.text_style.lines, el.image_path, el.native_style)
@@ -1290,7 +1290,7 @@ fn native_update_element(native NativeView, el Element, declared_text_changed bo
 			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
-			native_update_image(native, element_rect(el.frame), el.image_path, el.rotation)
+			native_update_image(native, element_rect(el.frame), image_path_for_element(el), el.rotation)
 		}
 		.button {
 			native_update_button(native, element_rect(el.frame), el.text, el.box, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, el.text_style.lines, el.image_path, el.native_style)
