@@ -1,5 +1,7 @@
 module ui2
 
+import math
+
 pub struct RepeatPattern {
 pub mut:
 	id           string
@@ -54,6 +56,26 @@ pub fn (pattern RepeatPattern) source_rect(frame Rect) Rect {
 		width:  frame.width * x_scale
 		height: frame.height * y_scale
 	}
+}
+
+pub fn (pattern RepeatPattern) phase(frame Rect) Rect {
+	if !pattern.valid() || frame.width <= 0 || frame.height <= 0 {
+		return Rect{}
+	}
+	return Rect{
+		x:      positive_pattern_remainder(pattern.origin_x - frame.x, pattern.tile_width)
+		y:      positive_pattern_remainder(pattern.origin_y - frame.y, pattern.tile_height)
+		width:  pattern.tile_width
+		height: pattern.tile_height
+	}
+}
+
+fn positive_pattern_remainder(value f64, modulus f64) f64 {
+	mut result := math.fmod(value, modulus)
+	if result < 0 {
+		result += modulus
+	}
+	return result
 }
 
 fn repeat_pattern_cache_key(pattern RepeatPattern) string {
