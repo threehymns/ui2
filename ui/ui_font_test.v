@@ -202,6 +202,12 @@ fn test_font_pick_reports_nothing_for_an_empty_tree() {
 	assert bold == ''
 }
 
+fn test_startup_font_paths_use_the_bundled_face_without_discovery() {
+	regular, bold := startup_font_paths()
+	assert os.file_name(regular) == 'Roboto-Regular.ttf'
+	assert os.file_name(bold) == 'Roboto-Bold.ttf'
+}
+
 fn test_ui2_font_overrides_the_chosen_family() {
 	dir := font_test_dir('env', ['Custom.ttf', 'Custom-Bold.ttf'])
 	defer {

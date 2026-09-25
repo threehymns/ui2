@@ -134,6 +134,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_image_ids = map[string]int{}
 	__global g_image_resource_ids = map[string]int{}
 	__global g_font_metrics = FontMetrics{}
+	__global g_font_resource = FontResource{}
+	__global g_font_work_started = false
+	__global g_font_work_ch = chan FontResource{cap: 1}
 	__global g_font_files = map[string]string{}
 	__global g_font_indexed = false
 	__global g_font_family_files = map[string]string{}
@@ -141,6 +144,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_font_symbol_ids = []int{}
 	__global g_font_symbol_bases = map[int]bool{}
 	__global g_font_symbol_fons = voidptr(unsafe { nil })
+	__global g_first_frame_complete = false
 	__global g_active_images = map[string]bool{}
 	__global g_active_image_resources = map[string]bool{}
 	__global g_open_dropdown = ''
@@ -215,6 +219,29 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_text_kinds.delete(id)
 	}
 
+	fn font_work_worker(ch chan FontResource) {
+		ch <- discover_font_resource()
+	}
+
+	fn start_font_work() {
+		if g_font_work_started {
+			return
+		}
+		g_font_work_started = true
+		trace_startup_phase(.font_work)
+		spawn font_work_worker(g_font_work_ch)
+	}
+
+	fn poll_font_work() {
+		select {
+			resource := <-g_font_work_ch {
+				g_font_resource = resource
+				g_font_metrics = resource.metrics
+			}
+			else {}
+		}
+	}
+
 	// ── Public API ─────────────────────────────────────────────────────
 
 	pub fn bounds() Rect {
@@ -255,13 +282,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_event_handler = event_fn
 		configure_animation_driver(request_refresh, false)
 		publish_menu_context(event_fn, title, unsafe { nil })
-		// Choosing the font here rather than letting gg ask `fc-match` for one
-		// keeps the window legible and identical across distributions, and
-		// gives draw_text the metrics it needs to size text in points.
-		font_regular, font_bold := font_paths()
-		if font_regular.len > 0 {
-			g_font_metrics = font_file_metrics(font_regular) or { FontMetrics{} }
-		}
+		g_font_metrics = if g_font_resource.ready { g_font_resource.metrics } else { FontMetrics{} }
+		g_font_work_started = g_font_resource.ready
+		g_first_frame_complete = false
+		font_regular, font_bold := startup_font_paths()
 		g_gg_app.ctx = gg.new_context(
 			bg_color: hex_color(0xf4f6f8)
 			font_path: font_regular
@@ -281,6 +305,8 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			max_dropped_files: 32
 			max_dropped_file_path_length: 4096
 		)
+		trace_startup_phase(.ui2_setup)
+		start_font_work()
 		g_gg_app.ctx.run()
 	}
 
@@ -569,12 +595,8 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	// ── Frame & event loop ─────────────────────────────────────────────
 
 	fn on_init(_ &GgApp) {
-		if voidptr(g_build_screen) == unsafe { nil } {
-			return
-		}
-		// gg/Sokol must receive images during initialization to make their GPU
-		// textures available for the first rendered frame.
-		preload_images(g_build_screen())
+		trace_startup_phase(.window_creation)
+		trace_startup_phase(.gpu_setup)
 	}
 
 	fn on_frame(app &GgApp) {
@@ -582,6 +604,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return
 		}
 		mut ctx := app.ctx
+		poll_font_work()
+		if g_first_frame_complete && g_font_resource.ready {
+			ensure_symbol_fallbacks(ctx)
+		}
 		// Some window managers can choose a client size different from the one
 		// requested in gg.Config before gg's cached resize event catches up. UI2
 		// lays out and clips against that cache, so synchronize it from Sokol's
@@ -594,10 +620,6 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			ctx.window.width = live_size.width
 			ctx.window.height = live_size.height
 		}
-		// gg builds its fonts in the sokol init callback, after the window has
-		// been created, so the fallback chain is attached on the way into the
-		// first frame rather than in run_window.
-		ensure_symbol_fallbacks(ctx)
 		mut root := Element{}
 		mut has_root := false
 		if voidptr(g_build_screen) != unsafe { nil } {
@@ -641,6 +663,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		check_long_press()
 		ctx.end()
+		if !g_first_frame_complete {
+			g_first_frame_complete = true
+		}
 	}
 
 	fn on_event(e &gg.Event, _ &GgApp) {
@@ -2818,6 +2843,9 @@ fn page_focused_text_area(direction int) {
 		if os.is_file(family) {
 			path = family
 		} else {
+			if !g_first_frame_complete {
+				return ''
+			}
 			if !g_font_indexed {
 				mut dirs := font_bundle_dirs()
 				dirs << font_system_dirs()
@@ -2861,7 +2889,12 @@ fn page_focused_text_area(direction int) {
 			g_text_area_layouts = map[string]TextAreaLayout{}
 			g_font_symbol_ids = []int{}
 			g_font_symbol_bases = map[int]bool{}
-			for path in font_symbol_paths() {
+			paths := if g_font_resource.ready {
+				g_font_resource.symbol_paths
+			} else {
+				font_symbol_paths()
+			}
+			for path in paths {
 				bytes := os.read_bytes(path) or { continue }
 				id := fons.add_font_mem(path, bytes, true)
 				if id != fontstash.invalid {
