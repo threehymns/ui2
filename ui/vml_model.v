@@ -1525,6 +1525,13 @@ pub:
 	height int    = 800
 	min_width  int
 	min_height int
+	// on_key names a public app action taking the normalized key string
+	// (e.g. `fn (mut app App) handle_key(key string)`). When set, the
+	// navigation keys up/down/left/right/home/end/page_up/page_down are
+	// routed to it and consumed before the focused control sees them, so a
+	// search field keeps working while arrows drive the UI. All other keys
+	// (typing, Enter, shortcuts) behave as before.
+	on_key string
 }
 
 @[heap]
@@ -1533,6 +1540,8 @@ struct VmlController[T] {
 mut:
 	model  T
 	events map[string]VmlEvent
+	// key_action is the VmlRunConfig.on_key action routed by vml_controller_key.
+	key_action string
 }
 
 @[heap]
@@ -1635,20 +1644,68 @@ fn (mut controller VmlController[T]) handle(event_id string) {
 pub fn run_vml[T](config VmlRunConfig[T]) ! {
 	template := parse_vml(config.source)!
 	v_validate_template[T](template, config.model)!
+	if config.on_key.len > 0 {
+		type_check_action[T](config.on_key, [
+			VSchema{
+				kind: .string_
+			},
+		], 0)!
+	}
 	initial_frame := rect(0, 0, f64(config.width), f64(config.height))
 	resolved, events := v_evaluate_template(template, config.model, initial_frame)!
 	validate_element_tree(element_from_vnode(resolved, initial_frame)!)!
 	mut controller := &VmlController[T]{
-		template: template
-		model:    config.model
-		events:   events
+		template:   template
+		model:      config.model
+		events:     events
+		key_action: config.on_key
 	}
 	mut runtime := vml_runtime()
 	runtime.controller = voidptr(controller)
+	if config.on_key.len > 0 {
+		on_key(vml_controller_key[T])
+	}
 	$if macos || windows || linux {
 		run_window_with_min_size(config.title, config.width, config.height, config.min_width,
 			config.min_height, vml_controller_build[T], vml_controller_handle[T])
 	} $else {
 		run(vml_controller_build[T], vml_controller_handle[T])
 	}
+}
+
+// vml_routed_keys are the navigation keys an on_key action receives. Text
+// input, Enter/submit and shortcuts never reach it, so typing keeps working
+// while arrows drive the UI.
+const vml_routed_keys = ['up', 'down', 'left', 'right', 'home', 'end', 'page_up', 'page_down']
+
+// vml_controller_key routes one normalized key press to the run_vml on_key
+// action and consumes it before the focused control sees it. It mirrors
+// vml_controller_handle: the controller type comes from the run_vml
+// instantiation, so no model needs to be reachable from the global handler.
+fn vml_controller_key[T](key string) {
+	if key !in vml_routed_keys {
+		return
+	}
+	runtime := vml_runtime()
+	if runtime.controller == unsafe { nil } {
+		return
+	}
+	mut controller := unsafe { &VmlController[T](runtime.controller) }
+	if controller.key_action == '' {
+		return
+	}
+	vml_dispatch[T](mut controller.model, VmlInvocation{
+		name: controller.key_action
+		args: [&VExpression{
+			kind:   .literal
+			value:  key
+			quoted: true
+		}]
+		scope: map[string]VValue{}
+	}) or {
+		eprintln('ui2 VML key action failed: ${err}')
+		return
+	}
+	consume_key()
+	refresh()
 }
