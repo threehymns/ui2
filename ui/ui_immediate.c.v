@@ -1776,7 +1776,7 @@ fn page_focused_text_area(direction int) {
 		}
 		draw_scrollbar(ctx, dropdown_state.x, dropdown_state.y, dropdown_state.width,
 			dropdown_state.height, f64(dropdown_state.options.len) * dropdown_state.row_height +
-			dropdown_popup_padding * 2, g_dropdown_scroll, false)
+			dropdown_popup_padding * 2, g_dropdown_scroll, false, 0, 0)
 		apply_clip(ctx, window)
 	}
 
@@ -2200,11 +2200,11 @@ fn page_focused_text_area(direction int) {
 					apply_clip(ctx, child_clip)
 					if scrolls_y {
 						draw_scrollbar(ctx, x, y, el.frame.width, el.frame.height, content_h, scroll_y,
-							el.persistent_scrollbars)
+							el.persistent_scrollbars, el.scrollbar_thumb, el.scrollbar_track)
 					}
 					if scrolls_x {
 						draw_scrollbar_x(ctx, frame, content_w, scroll_x, el.persistent_scrollbars,
-							beside_vertical)
+							beside_vertical, el.scrollbar_thumb, el.scrollbar_track)
 					}
 				}
 				apply_clip(ctx, clip)
@@ -2958,7 +2958,12 @@ fn page_focused_text_area(direction int) {
 
 	fn draw_control_surface(ctx &gg.Context, x f64, y f64, w f64, h f64, box BoxStyle, focused bool, enabled bool) {
 		draw_rect(ctx, x, y, w, h, box.bg, box.radius)
-		border := if focused {
+		// A declared border color styles the rounded control outline, which
+		// follows the box radius. Without one the outline keeps its fixed
+		// focus/enabled colors, preserving every existing rendering.
+		border := if box_draws_border(box) {
+			box.border_color
+		} else if focused {
 			u32(0x3478d4)
 		} else if enabled {
 			u32(0xd7dee8)
@@ -2970,7 +2975,13 @@ fn page_focused_text_area(direction int) {
 			inner_radius := if box.radius > 1 { box.radius - 1 } else { 0.0 }
 			draw_outline(ctx, x + 1, y + 1, w - 2, h - 2, border, inner_radius)
 		}
-		draw_box_borders(ctx, x, y, w, h, box)
+		// The generic border pass draws square edges, which would poke past
+		// the rounded outline above. With a declared border the outline is
+		// the border, so only draw square sides for undeclared ones (a no-op
+		// when no widths are set).
+		if !box_draws_border(box) {
+			draw_box_borders(ctx, x, y, w, h, box)
+		}
 	}
 
 	// unstyled_box_bg is BoxStyle's default background: the button was left
@@ -3036,22 +3047,27 @@ fn page_focused_text_area(direction int) {
 			f32(center_y - 2), pen)
 	}
 
-	fn draw_scrollbar(ctx &gg.Context, x f64, y f64, width f64, height f64, content_height f64, offset f64, persistent bool) {
+	fn draw_scrollbar(ctx &gg.Context, x f64, y f64, width f64, height f64, content_height f64, offset f64, persistent bool, thumb_color u32, track_color u32) {
 		bar := scrollbar_geometry(rect(x, y, width, height), content_height, offset, persistent)
 		if bar.track.width <= 0 || bar.track.height <= 0 {
 			return
 		}
-		draw_rect(ctx, bar.track.x, bar.track.y, bar.track.width, bar.track.height, 0xf1f5f9, 2.5)
-		draw_rect(ctx, bar.thumb.x, bar.thumb.y, bar.thumb.width, bar.thumb.height, 0xcbd5e1, 2.5)
+		// Zero keeps the legacy fixed colors, so existing renderings are unchanged.
+		track := if track_color != 0 { track_color } else { u32(0xf1f5f9) }
+		thumb := if thumb_color != 0 { thumb_color } else { u32(0xcbd5e1) }
+		draw_rect(ctx, bar.track.x, bar.track.y, bar.track.width, bar.track.height, track, 2.5)
+		draw_rect(ctx, bar.thumb.x, bar.thumb.y, bar.thumb.width, bar.thumb.height, thumb, 2.5)
 	}
 
-	fn draw_scrollbar_x(ctx &gg.Context, frame Rect, content_width f64, offset f64, persistent bool, beside_vertical bool) {
+	fn draw_scrollbar_x(ctx &gg.Context, frame Rect, content_width f64, offset f64, persistent bool, beside_vertical bool, thumb_color u32, track_color u32) {
 		bar := scrollbar_geometry_x(frame, content_width, offset, persistent, beside_vertical)
 		if bar.track.width <= 0 || bar.track.height <= 0 {
 			return
 		}
-		draw_rect(ctx, bar.track.x, bar.track.y, bar.track.width, bar.track.height, 0xf1f5f9, 2.5)
-		draw_rect(ctx, bar.thumb.x, bar.thumb.y, bar.thumb.width, bar.thumb.height, 0xcbd5e1, 2.5)
+		track := if track_color != 0 { track_color } else { u32(0xf1f5f9) }
+		thumb := if thumb_color != 0 { thumb_color } else { u32(0xcbd5e1) }
+		draw_rect(ctx, bar.track.x, bar.track.y, bar.track.width, bar.track.height, track, 2.5)
+		draw_rect(ctx, bar.thumb.x, bar.thumb.y, bar.thumb.width, bar.thumb.height, thumb, 2.5)
 	}
 
 	// text_font_file resolves a declared family to the file fontstash has to

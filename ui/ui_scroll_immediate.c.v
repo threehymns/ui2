@@ -586,7 +586,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		if !el.disable_scroll && pane_clip.width > 0 && pane_clip.height > 0 {
 			apply_clip(ctx, pane_clip)
 			draw_scrollbar(ctx, x, y, frame.width, frame.height, content_height, offset,
-				el.persistent_scrollbars)
+				el.persistent_scrollbars, el.scrollbar_thumb, el.scrollbar_track)
 		}
 		// Neither the next sibling nor the pane's scrollbar inherits the text clip.
 		apply_clip(ctx, clip)

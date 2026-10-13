@@ -387,6 +387,8 @@ pub:
 	readonly              bool // text_area: selectable but not editable
 	disable_scroll        bool // text_area: hide the internal scroll view scroller
 	persistent_scrollbars bool // scroll: keep a legacy always-visible scroller instead of the auto-fading overlay one
+	scrollbar_thumb u32 // scroll: scrollbar thumb color, 0 keeps the default
+	scrollbar_track u32 // scroll: scrollbar track color, 0 keeps the default
 	scroll_mode           ScrollMode // scroll: the axes the content scrolls along
 	secure                bool // text_field: native password entry
 	clickable             bool // view/image: emit pointer down/up events
