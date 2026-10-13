@@ -2958,7 +2958,12 @@ fn page_focused_text_area(direction int) {
 
 	fn draw_control_surface(ctx &gg.Context, x f64, y f64, w f64, h f64, box BoxStyle, focused bool, enabled bool) {
 		draw_rect(ctx, x, y, w, h, box.bg, box.radius)
-		border := if focused {
+		// A declared border color styles the rounded control outline, which
+		// follows the box radius. Without one the outline keeps its fixed
+		// focus/enabled colors, preserving every existing rendering.
+		border := if box_draws_border(box) {
+			box.border_color
+		} else if focused {
 			u32(0x3478d4)
 		} else if enabled {
 			u32(0xd7dee8)
@@ -2970,7 +2975,13 @@ fn page_focused_text_area(direction int) {
 			inner_radius := if box.radius > 1 { box.radius - 1 } else { 0.0 }
 			draw_outline(ctx, x + 1, y + 1, w - 2, h - 2, border, inner_radius)
 		}
-		draw_box_borders(ctx, x, y, w, h, box)
+		// The generic border pass draws square edges, which would poke past
+		// the rounded outline above. With a declared border the outline is
+		// the border, so only draw square sides for undeclared ones (a no-op
+		// when no widths are set).
+		if !box_draws_border(box) {
+			draw_box_borders(ctx, x, y, w, h, box)
+		}
 	}
 
 	// unstyled_box_bg is BoxStyle's default background: the button was left
