@@ -885,12 +885,16 @@ fn node_to_element_base(node &VNode, frame Rect) !Element {
 						children)
 					box: v_box(node)
 					scroll_mode: mode
+					scrollbar_thumb: v_color(node, 'thumb_color', 0)
+					scrollbar_track: v_color(node, 'track_color', 0)
 				}
 			}
 			return Element{
 				...scroll(node.id, frame, v_color(node, 'background', 0xffffff), children)
 				box: v_box(node)
 				scroll_mode: mode
+				scrollbar_thumb: v_color(node, 'thumb_color', 0)
+				scrollbar_track: v_color(node, 'track_color', 0)
 			}
 		}
 		'View', 'Rectangle' {
